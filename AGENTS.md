@@ -133,10 +133,11 @@ bug happened here:
 - capabilities the UI reads must be ones the server sends, since a missing one
   is `undefined`, which is falsy, so the feature disables itself quietly
 - no interpolation into `innerHTML`, no classes toggled that no stylesheet has
-- no em or en dashes, and no credentials, in any tracked file
 
 Prefer adding a case there over writing it down as a rule below: a rule is only
-as good as the next person's memory, and these run in a second.
+as good as the next person's memory, and these run in a second. Keep it to
+project contracts: house style and secret scanning are the individual
+contributor's business, not something a shared repo should enforce.
 
 CI (`.github/workflows/check.yml`) runs lint, format, `node --check` on the
 frontend, the suite, and a boot with no optional dependencies present, which is

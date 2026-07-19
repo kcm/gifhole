@@ -1,0 +1,23 @@
+# Run gifhole without a Python toolchain:
+#
+#   docker compose up -d
+#   open http://127.0.0.1:8777
+#
+# The library is a bind mount rather than a named volume, so the GIFs stay
+# ordinary files in a folder you can open in Finder. That is the whole premise
+# of the app, and a named volume would hide them inside Docker.
+services:
+  gifhole:
+    build: .
+    # Bound to the host's loopback, not 0.0.0.0: there is no authentication in
+    # gifhole, so it should not be reachable from the network.
+    ports:
+      - "127.0.0.1:8777:8777"
+    volumes:
+      - ./library:/library
+    environment:
+      # Uncomment to enable Claude descriptions. OCR is macOS-only and stays
+      # unavailable in the container either way.
+      # ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GIFHOLE_ROOT: /library
+    restart: unless-stopped

@@ -1,0 +1,8 @@
+.git
+.venv
+dist
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+LEDGER.local.md

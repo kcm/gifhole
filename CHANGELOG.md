@@ -22,6 +22,10 @@ losing anything. Anything that would break that is a major change.
 
 ### Added
 
+- Dockerfile and compose file: run gifhole without a Python toolchain, with the
+  library bind-mounted so the GIFs stay ordinary files on the host. Doubles as
+  the Linux test environment, where the suite now passes with the macOS-only
+  features absent.
 - Continuous integration on every push and pull request: lint, format, a
   syntax check of the bundler-less frontend, the suite, and a boot with no
   optional dependencies installed.

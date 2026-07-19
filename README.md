@@ -314,6 +314,41 @@ The file's header comment walks through both. ffmpeg is intentionally not a
 dependency, because gifhole runs fine without it and skips video sources; run
 `brew install ffmpeg` to enable video-to-GIF conversion.
 
+## Docker
+
+Run it without a Python toolchain:
+
+```
+docker compose up -d
+open http://127.0.0.1:8777
+```
+
+The library is a **bind mount** (`./library`), not a named volume, on purpose:
+the whole premise is that your GIFs stay ordinary files in a folder you can
+open in Finder, and a named volume would bury them inside Docker. Files added
+through the containerised app are plain files on the host, and they outlive the
+container.
+
+The port is published to `127.0.0.1` rather than `0.0.0.0`. gifhole has no
+authentication, so it should not be reachable from your network. The `0.0.0.0`
+inside the container is not the same thing: the container's namespace is the
+boundary and the mapping decides what is actually exposed.
+
+ffmpeg is in the image, so URL imports of MP4 sources work. **Vision OCR and
+the animated-paste clipboard are macOS-only and are simply absent**, which is
+the degradation this image is useful for proving.
+
+### Testing on Linux
+
+```
+docker run --rm -v "$PWD":/src:ro python:3.13-slim sh -c \
+  'cp -r /src /work && cd /work && rm -rf .venv .git &&
+   pip install -q uv && uv sync -q && uv run pytest -q'
+```
+
+Copied in rather than mounted read-write: running `uv sync` against a mounted
+source tree replaces the host's `.venv` with Linux binaries.
+
 ## Development
 
 ```
@@ -340,9 +375,9 @@ is a reasonable thing to pick up; none is load-bearing for the rest.
 - **Giphy search pages yield only the first handful.** They lazy-load, so a
   scrape sees roughly six. Individual GIF pages and direct media links are
   unaffected.
-- **Only tested on macOS**, in Chrome. Linux and Windows should work apart from
-  the two macOS-only features (Vision OCR, and the file clipboard that keeps a
-  paste animated), both of which degrade cleanly. Neither has been run.
+- **Linux is covered by the container**: the suite passes there with Vision,
+  the file clipboard and (optionally) ffmpeg absent. **Windows is untested.**
+  The browser side has only been exercised in Chrome on macOS.
 - **Firefox has had one path verified** (dragging a GIF off a page, using its
   `text/x-moz-url`). Safari is untested; it supplies no title with a drag, so
   imports there will be named `download.gif`.

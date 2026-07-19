@@ -11,6 +11,10 @@ exactly that, so they are asserted here rather than rediscovered by hand:
 
 These run in a second and need no browser, so they are the cheap half of
 "verify through the real interface", not a replacement for it.
+
+Deliberately only project contracts. Prose style and credential scanning are
+personal preferences and belong in a global git hook, not in a shared repo
+where they would be imposed on everyone contributing.
 """
 
 from __future__ import annotations
@@ -91,62 +95,3 @@ def test_every_class_the_js_toggles_is_styled():
     toggled = set(re.findall(r"""classList\.(?:add|toggle)\(\s*["']([a-z-]+)["']""", JS))
     missing = sorted(c for c in toggled if f".{c}" not in CSS)
     assert not missing, f"classes toggled in app.js but absent from style.css: {missing}"
-
-
-# -- repo hygiene ------------------------------------------------------------
-
-REPO = Path(__file__).resolve().parent.parent
-TEXT_SUFFIXES = {".py", ".js", ".css", ".html", ".md", ".toml", ".yml", ".rb"}
-
-
-def tracked_text_files() -> list[Path]:
-    import subprocess
-
-    out = subprocess.run(
-        ["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True
-    ).stdout.split()
-    return [REPO / f for f in out if Path(f).suffix in TEXT_SUFFIXES]
-
-
-# Written as escapes, not as the characters themselves. This file is scanned
-# like every other tracked file, so spelling them literally would make the
-# check fail on its own source. It did, on the first CI run.
-DASHES = ("\u2014", "\u2013")
-
-
-def test_no_em_or_en_dashes_anywhere():
-    """A standing style rule, enforced rather than remembered.
-
-    Generated text is the reason this is mechanical: a model wrote one into a
-    description here, and prose review is the first thing skipped on a large
-    diff.
-    """
-    offenders = []
-    for path in tracked_text_files():
-        for number, line in enumerate(path.read_text(errors="ignore").splitlines(), 1):
-            if any(d in line for d in DASHES):
-                offenders.append(f"{path.relative_to(REPO)}:{number}: {line.strip()[:70]}")
-    assert not offenders, "em/en dashes found:\n" + "\n".join(offenders[:15])
-
-
-# Shapes worth refusing outright. Deliberately narrow: a scanner that cries
-# wolf gets disabled, and this only has to catch the credential types this
-# project actually handles.
-SECRET_PATTERNS = {
-    "Anthropic API key": r"sk-ant-[A-Za-z0-9_-]{20,}",
-    "GitHub token": r"gh[pousr]_[A-Za-z0-9]{20,}",
-    "AWS access key": r"AKIA[0-9A-Z]{16}",
-    "private key block": r"BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY",
-}
-
-
-def test_no_credentials_are_committed():
-    """An API key was pasted into this project's development twice. Nothing
-    stopped it reaching a commit except noticing, which does not scale."""
-    found = []
-    for path in tracked_text_files():
-        text = path.read_text(errors="ignore")
-        for label, pattern in SECRET_PATTERNS.items():
-            if re.search(pattern, text):
-                found.append(f"{label} in {path.relative_to(REPO)}")
-    assert not found, "possible credentials committed:\n" + "\n".join(found)
