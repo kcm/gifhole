@@ -75,12 +75,22 @@ async function copyText(text) {
   return text;
 }
 
+// The browser can only put a still PNG on the clipboard, so a paste into
+// Discord or Slack loses the animation. The local server can hand over the
+// actual file instead, which those apps upload as-is and keep moving.
+async function copyFileViaServer(gif) {
+  const res = await fetch(`/api/gifs/${gif.id}/clipboard`, { method: "POST" });
+  if (!res.ok) throw new Error((await res.json()).detail || `server said ${res.status}`);
+  return "copied the GIF file, animation intact";
+}
+
 async function handleClick(event, gif, card) {
   event.preventDefault();
   try {
     let what;
     if (event.shiftKey) what = await copyText(location.origin + gif.url);
     else if (event.altKey || event.metaKey) what = await copyText(`${state.root}/${gif.filename}`);
+    else if (capabilities.file_clipboard) what = await copyFileViaServer(gif);
     else what = await copyImage(gif, card.querySelector('img'));
     toast(what);
     card.classList.add("flash");
@@ -494,7 +504,10 @@ addEventListener("paste", (e) => {
 // Each skin gets a period-correct tagline; the switch persists to localStorage
 // and is applied pre-paint by the inline <head> script.
 const TAGLINES = {
-  memepool: "a small pile of animated GIFs, kept close at hand",
+  // Memepool had no famous slogan the way Fark or AltaVista did, so this is
+  // written in its register (a dry link-blog of obscure finds) rather than
+  // passed off as a quotation.
+  memepool: "animated oddities, found lying around the internet",
   fark: "it's not news, it's GIFs",
   zombo: "welcome. you can do anything. the only limit is yourself.",
   webvan: "GIFs delivered to your door in 30 minutes or less",

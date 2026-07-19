@@ -76,6 +76,12 @@ Deletes move files to `.trash/`, they do not unlink. Preserve that.
   full-read SSRF through `/api/preview`. Use `_guarded_get()` or `download()`,
   which re-check each hop and cap the chain; never call `client.get` directly on
   a user-supplied URL.
+- **Develop with `uv run gifhole --reload`.** Editing source under a plainly
+  started server means testing yesterday's code, which has burned real debugging
+  time here. The flag can't hand uvicorn the app instance the normal path builds
+  (the reloader rebuilds it in a subprocess, so it needs the import string plus
+  `factory=True`), so `--root` travels via the `GIFHOLE_ROOT` environment
+  variable instead. Keep both halves if you touch `cli.py`.
 - **No module-level `app = create_app()`.** Building one at import time created a
   real library under `~/.gifhole`, started a worker thread, and ran Vision OCR
   over the user's actual GIFs whenever anything imported the module, the test
@@ -103,9 +109,17 @@ Deletes move files to `.trash/`, they do not unlink. Preserve that.
   the console will lie to you; check a screenshot.
 - Clipboard writes need a real user gesture. Synthesized `MouseEvent`s fail with
   `NotAllowedError`. That is the test harness, not a bug.
-- Browsers will not accept `image/gif` on the clipboard, so plain-click copies a
-  PNG of the **first frame**. Animation is preserved only via the URL copy
-  (shift-click). Do not "fix" this by writing a GIF blob; it silently no-ops.
+- **Browsers will not accept `image/gif` on the clipboard**
+  (`ClipboardItem.supports("image/gif") === false`), so no amount of frontend
+  work will paste an animation. Do not "fix" this by writing a GIF blob; it
+  silently no-ops. The way out is not the browser: on macOS,
+  `clipboard.copy_file()` writes the real file to the pasteboard via AppKit, and
+  `POST /api/gifs/{id}/clipboard` exposes it, which is what makes Discord upload
+  an animated GIF instead of a still. Two consequences to preserve: that path
+  needs the server (unlike the PNG fallback), and it is gated on the
+  `file_clipboard` capability so non-Mac clients degrade to the PNG rather than
+  erroring. Verify a change here by reading the pasteboard back, not by trusting
+  the toast.
 - **A byte-minimal hand-built GIF passes the magic-byte check but is not
   decodable.** Pillow rejects it as "image file is truncated". Test fixtures use
   `make_gif()` / `make_animated_gif()` in conftest, which build real GIFs via

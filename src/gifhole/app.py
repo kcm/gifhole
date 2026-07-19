@@ -10,7 +10,7 @@ from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from gifhole import fetch, ocr
+from gifhole import clipboard, fetch, ocr
 from gifhole.jobs import JobQueue
 from gifhole.store import Store
 
@@ -231,6 +231,25 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
         queue_ocr(gif.id, gif.filename)
         return JSONResponse({"ok": True})
 
+    @app.post("/api/gifs/{gif_id}/clipboard")
+    def copy_to_clipboard(gif_id: int) -> JSONResponse:
+        """Put the GIF on the pasteboard as a file, so pastes stay animated.
+
+        A browser can only offer a still PNG. Handing over the file lets
+        Discord, Slack and friends upload the real GIF.
+        """
+        gif = store.get(gif_id)
+        if gif is None:
+            raise HTTPException(404, "no such gif")
+        if not clipboard.available():
+            raise HTTPException(503, "the file clipboard needs macOS")
+        try:
+            clipboard.copy_file(store.gifs_dir / gif.filename)
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(500, str(exc)) from exc
+        store.bump_copies(gif_id)
+        return JSONResponse({"ok": True, "filename": gif.filename})
+
     @app.post("/api/gifs/{gif_id}/enrich")
     def run_enrich(gif_id: int) -> JSONResponse:
         """Describe a GIF with Claude. Opt-in, per GIF, costs money."""
@@ -267,6 +286,7 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
                     "enrich": enrich_ok,
                     "enrich_reason": enrich_why,
                     "ffmpeg": fetch.ffmpeg_available(),
+                    "file_clipboard": clipboard.available(),
                 },
             }
         )

@@ -12,7 +12,8 @@ it somewhere else with `--root ~/Pictures/gifs`.
 
 ## Using it
 
-- **click** a GIF: copies the image, ready to paste into Slack, Messages, docs
+- **click** a GIF: copies it, ready to paste into Discord, Slack, Messages, docs.
+  On macOS the animation survives; see [copying](#on-copying-and-keeping-the-animation)
 - **shift-click**: copies its `http://127.0.0.1:8777/...` URL
 - **alt-click** (option-click on a Mac): copies its file path
 - **drag GIFs onto the window** (or press *Add GIFs*) to add them
@@ -60,12 +61,18 @@ Without ffmpeg, direct GIFs still download and videos are skipped with a note
 rather than failing the batch. The server refuses `file://` and
 private-network addresses.
 
-### One caveat on copying
+### On copying, and keeping the animation
 
 Browsers only accept a few image formats on the clipboard, and GIF is not one of
-them. A plain click therefore pastes the **first frame** as a still PNG. When
-you need the animation to survive, shift-click to copy the URL instead, which
-stays animated anywhere that can reach your machine.
+them, so a web page can only ever hand over a still PNG of the first frame.
+
+On **macOS**, gifhole gets around this: a plain click asks the local server to
+put the actual `.gif` **file** on the pasteboard, exactly as Finder's Copy does.
+Discord, Slack and friends then upload the real file and the animation survives.
+This needs the server running, which it is if you're looking at the page.
+
+Elsewhere a plain click falls back to the still PNG. Shift-click copies the URL
+instead, which stays animated anywhere that can reach your machine.
 
 ## Options
 
@@ -74,6 +81,7 @@ gifhole --root DIR    library location   (default ~/.gifhole)
        --port N      port               (default 8777)
        --host ADDR   bind address       (default 127.0.0.1, loopback only)
        --no-open     do not open a browser
+       --reload      restart on source changes (development)
 ```
 
 Deleting a GIF moves it to `<root>/.trash/`; nothing is erased from disk.
@@ -110,4 +118,9 @@ dependency, because gifhole runs fine without it and skips video sources; run
 uv sync
 uv run pytest
 uv run ruff check .
+uv run gifhole --reload        # picks up source edits without a restart
 ```
+
+`--reload` watches the package's `.py` files and restarts the server when one
+changes, so you never test against code you already edited. Static assets are
+read from disk per request and need no restart, only a browser refresh.
