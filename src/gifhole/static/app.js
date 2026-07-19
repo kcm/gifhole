@@ -839,18 +839,73 @@ function showDrop() {
 addEventListener("dragenter", (e) => { e.preventDefault(); showDrop(); });
 addEventListener("dragover", (e) => { e.preventDefault(); showDrop(); });
 addEventListener("dragend", () => (drop.hidden = true));
+// Dragging out of a web page hands over a URL, not a file: the browser never
+// downloaded a copy to give away. So a drag from Giphy, Tenor or a search
+// results page arrives as text, and treating "no files" as "no GIFs" reported
+// nothing usable when the URL was right there.
+//
+// Types are tried in order of how specific they are. text/x-moz-url is
+// Firefox's own, and is "url\ntitle", so the first line is the URL.
+function urlFromTransfer(dt) {
+  if (!dt) return null;
+
+  // Firefox first, because its type is the only one that carries a title, and
+  // the title is the only readable name a Giphy or Tenor drag ever supplies:
+  // every file there is called giphy.gif.
+  const moz = dt.getData("text/x-moz-url");
+  if (moz) {
+    const [url, title] = moz.split(/[\r\n]+/);
+    if (url && /^https?:\/\/\S+$/i.test(url.trim())) {
+      return { url: url.trim(), title: (title || "").trim() };
+    }
+  }
+
+  const uriList = dt.getData("text/uri-list");
+  if (uriList) {
+    // Comment lines start with "#" in the uri-list format.
+    const first = uriList.split(/[\r\n]+/).find((line) => line && !line.startsWith("#"));
+    if (first && /^https?:\/\//i.test(first)) return { url: first.trim(), title: "" };
+  }
+
+  for (const type of ["text/plain", "URL", "text"]) {
+    const raw = dt.getData(type);
+    const first = raw?.split(/[\r\n]+/)[0]?.trim();
+    if (first && /^https?:\/\/\S+$/i.test(first)) return { url: first, title: "" };
+  }
+
+  // Last resort: the dragged markup. Parsed, not matched with a regex, and
+  // DOMParser neither runs scripts nor loads the image.
+  const html = dt.getData("text/html");
+  if (html) {
+    const img = new DOMParser().parseFromString(html, "text/html").querySelector("img");
+    const src = img?.getAttribute("src") || "";
+    // alt text is a real name surprisingly often on media sites.
+    if (/^https?:\/\//i.test(src)) return { url: src, title: img.getAttribute("alt") || "" };
+  }
+  return null;
+}
+
 addEventListener("drop", (e) => {
   e.preventDefault();
   clearTimeout(dragTimer);
   drop.hidden = true;
-  upload(e.dataTransfer.files);
+
+  const files = [...(e.dataTransfer?.files || [])];
+  if (files.length) return upload(files);
+
+  const dragged = urlFromTransfer(e.dataTransfer);
+  // grab() takes a direct .gif or a page and works out which, so a drag of the
+  // image and a drag of the link to it both land somewhere sensible.
+  if (dragged) return grab(dragged.url, dragged.title);
+
+  toast("nothing to add in that drop");
 });
 
 // ---------------------------------------------------------------- grabbing
 
 // A page can hold hundreds of GIFs, so discovery and import are separate: we
 // list what's there, let you pick, then download only the ticked ones.
-async function grab(url) {
+async function grab(url, title = "") {
   if (!url) return;
   toast("looking…");
   const res = await fetch("/api/fetch/discover", {
@@ -863,8 +918,11 @@ async function grab(url) {
     return;
   }
   const { kind, candidates } = await res.json();
-  // A direct link is unambiguous; no point making you tick one box.
-  if (kind === "direct") return importUrls(candidates);
+  // A direct link is unambiguous; no point making you tick one box. A dragged
+  // title is the only name a Giphy or Tenor link carries, so it is kept.
+  if (kind === "direct") {
+    return importUrls(candidates.map((c) => ({ ...c, title: c.title || title })));
+  }
   openPicker(candidates);
 }
 
@@ -1092,10 +1150,10 @@ addEventListener("paste", (e) => {
     return toast(`that is ${image.type}, not a GIF. Copy the file itself, or paste its URL`);
   }
 
-  const text = data.getData("text")?.trim();
-  if (text && /^https?:\/\/\S+$/.test(text)) {
+  const pasted = urlFromTransfer(data);
+  if (pasted) {
     e.preventDefault();
-    grab(text);
+    grab(pasted.url, pasted.title);
   }
 });
 

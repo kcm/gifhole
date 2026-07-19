@@ -19,6 +19,10 @@ it somewhere else with `--root ~/Pictures/gifs`.
 - **drag GIFs onto the window**, **paste one** (copy the file in Finder, then
   press paste anywhere on the page), or press *Add GIFs*. All three take the
   same path, including the duplicate check
+- **drag a GIF straight off a web page** (Giphy, Tenor, a search results page):
+  the browser hands over a URL rather than a file, so it is downloaded like a
+  *Grab URL*. Where the drag carries a title, that becomes the filename, since
+  every file on Giphy is otherwise called `giphy.gif`
 - **paste a URL**, or press *Grab URL* and type one, to download from a `.gif`
   link or scrape a page. Giphy, Tenor, Reddit, and Imgur included
 - click a name to rename it

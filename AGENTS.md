@@ -251,6 +251,16 @@ stray request cannot empty it.
   cannot be undone. Any new destructive control in a panel should use the same
   helper, and must disarm when the panel closes or reopens or it would be
   waiting armed the next time it's opened.
+- **A drop is not always a file.** Dragging out of a web page hands over a URL,
+  because the browser never downloaded a copy to give away, so `dataTransfer`
+  has an empty `.files` and treating that as "no GIFs" reported nothing usable
+  while the URL sat right there. `urlFromTransfer()` reads `text/x-moz-url`
+  (Firefox, and the only type carrying a title), then `text/uri-list` (comment
+  lines start with `#`), then plain text, then the dragged markup. It is shared
+  with paste. Test any change to it against all four shapes; browsers differ.
+- **A dragged title is worth keeping.** Giphy and Tenor name every file
+  `giphy.gif` / `tenor.gif`, which `_filename_for()` rejects as generic, so
+  without the title the import lands as `download.gif` every time.
 - **Paste, drop and the file picker share `upload()`**, so a pasted GIF gets
   the same duplicate check and the same OCR as a dropped one. Paste reads
   `clipboardData.files` and falls back to `items`, since some sources only
