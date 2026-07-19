@@ -136,10 +136,17 @@ selected at once.
 
 ## Finding GIFs by what's in them
 
-Every added GIF is scanned for **burned-in text** (on macOS, via the Vision
-framework, so no key and no network). So searching `nope` finds the GIF with NOPE
-across it, even if you never tagged it. This runs automatically in the
-background; the header shows progress.
+Every added GIF is scanned for **burned-in text**, so searching `nope` finds
+the GIF with NOPE across it even if you never tagged it. It runs automatically
+in the background, needs no key and no network, and the header shows progress.
+
+Two engines. **macOS Vision** where it exists, which is noticeably better on
+heavy display faces with a stroke over a busy background. **Tesseract**
+everywhere else (`apt install tesseract-ocr`, already in the Docker image),
+which is what makes this work on Linux rather than the feature simply being
+absent. Tesseract is less exact: on a test caption Vision returned
+`NOPE NOT TODAY` and Tesseract `NOPE'NOT TODAY`. Search is substring-based, so
+both still match `nope`, `not` and `today`.
 
 For descriptions and meme identification, press **describe** on a card. That
 sends a few frames to Claude and comes back with a one-line description, the
@@ -208,8 +215,14 @@ put the actual `.gif` **file** on the pasteboard, exactly as Finder's Copy does.
 Discord, Slack and friends then upload the real file and the animation survives.
 This needs the server running, which it is if you're looking at the page.
 
-Elsewhere a plain click falls back to the still PNG. Shift-click copies the URL
-instead, which stays animated anywhere that can reach your machine.
+On **Linux** the same trick works through `wl-copy` (Wayland) or `xclip` (X11),
+which put a `text/uri-list` on the clipboard, exactly as a file manager does
+when you copy a file. Install one of those and it behaves like macOS. It needs
+a graphical session, so it is unavailable in the container, and gifhole reports
+it as unavailable rather than offering a button that always fails.
+
+Anywhere else a plain click falls back to the still PNG. Shift-click copies the
+URL instead, which stays animated anywhere that can reach your machine.
 
 ## Options
 
@@ -334,9 +347,10 @@ authentication, so it should not be reachable from your network. The `0.0.0.0`
 inside the container is not the same thing: the container's namespace is the
 boundary and the mapping decides what is actually exposed.
 
-ffmpeg is in the image, so URL imports of MP4 sources work. **Vision OCR and
-the animated-paste clipboard are macOS-only and are simply absent**, which is
-the degradation this image is useful for proving.
+ffmpeg and Tesseract are both in the image, so URL imports of MP4 sources work
+and burned-in text is still searchable. The **file clipboard is unavailable**
+in the container: it needs a graphical session and there isn't one, so a plain
+click falls back to copying a still.
 
 ### Testing on Linux
 
@@ -375,9 +389,13 @@ is a reasonable thing to pick up; none is load-bearing for the rest.
 - **Giphy search pages yield only the first handful.** They lazy-load, so a
   scrape sees roughly six. Individual GIF pages and direct media links are
   unaffected.
-- **Linux is covered by the container**: the suite passes there with Vision,
-  the file clipboard and (optionally) ffmpeg absent. **Windows is untested.**
-  The browser side has only been exercised in Chrome on macOS.
+- **Linux is covered by the container**: the suite passes there, OCR runs on
+  Tesseract, and the clipboard was verified against a virtual X display.
+  **Windows is untested.** The browser side has only been exercised in Chrome
+  on macOS.
+- **The Linux clipboard is verified only as far as the clipboard.** The right
+  `text/uri-list` lands on it; whether your particular chat client turns that
+  into a file upload has not been tested end to end.
 - **Firefox has had one path verified** (dragging a GIF off a page, using its
   `text/x-moz-url`). Safari is untested; it supplies no title with a drag, so
   imports there will be named `download.gif`.

@@ -31,6 +31,13 @@ losing anything. Anything that would break that is a major change.
 
 ### Added
 
+- **Tesseract OCR** as the engine outside macOS, so burned-in text stays
+  searchable on Linux instead of the feature being absent. Vision is still
+  preferred where it exists, being better on stylised lettering.
+- **Linux file clipboard** through `wl-copy` or `xclip`, putting a
+  `text/uri-list` on the clipboard the way a file manager does, so a paste can
+  stay animated there too. Reported unavailable without a graphical session
+  rather than offering a button that fails.
 - Dockerfile and compose file: run gifhole without a Python toolchain, with the
   library bind-mounted so the GIFs stay ordinary files on the host. Doubles as
   the Linux test environment, where the suite now passes with the macOS-only

@@ -7,9 +7,11 @@
 FROM python:3.13-slim
 
 # ffmpeg earns its place: Giphy, Tenor and Reddit all serve MP4 rather than
-# GIF, so without it most URL imports would be skipped.
+# GIF, so without it most URL imports would be skipped. tesseract is the OCR
+# engine outside macOS, and is what stops burned-in text being unsearchable
+# here rather than the feature simply being missing.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg tesseract-ocr tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv

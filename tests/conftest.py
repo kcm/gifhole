@@ -79,7 +79,8 @@ def store(tmp_path) -> Store:
 
 @pytest.fixture
 def client(tmp_path) -> TestClient:
-    # OCR off: the suite must not depend on macOS Vision being present.
+    # OCR off: the suite must not depend on any engine being present, and
+    # must not shell out to tesseract on machines that have it.
     return TestClient(create_app(tmp_path, auto_ocr=False))
 
 

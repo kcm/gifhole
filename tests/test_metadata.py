@@ -421,3 +421,64 @@ def test_the_real_changelog_has_notes_for_the_current_version():
 
     body = notes_for(gifhole.__version__, CHANGELOG.read_text())
     assert len(body) > 100
+
+
+# -- engine selection --------------------------------------------------------
+
+
+def test_ocr_reports_no_engine_when_neither_is_present(monkeypatch):
+    """The contract the whole optional layer rests on: absent means absent, and
+    the caller is told why rather than getting an empty result."""
+    from gifhole import ocr
+
+    monkeypatch.setattr(ocr, "_load_vision", lambda: None)
+    monkeypatch.setattr(ocr, "_tesseract", lambda: None)
+    assert ocr.backend() == ""
+    assert ocr.available() is False
+    result = ocr.read_gif_text(pathlib.Path("nonexistent.gif"))
+    assert result.available is False
+    assert "tesseract" in result.reason
+
+
+def test_ocr_falls_back_to_tesseract_when_vision_is_missing(monkeypatch):
+    from gifhole import ocr
+
+    monkeypatch.setattr(ocr, "_load_vision", lambda: None)
+    monkeypatch.setattr(ocr, "_tesseract", lambda: "/usr/bin/tesseract")
+    assert ocr.backend() == "tesseract"
+    assert ocr.available() is True
+
+
+def test_ocr_prefers_vision_where_it_exists(monkeypatch):
+    """Vision is markedly better on stylised lettering, so it wins."""
+    from gifhole import ocr
+
+    monkeypatch.setattr(ocr, "_load_vision", lambda: ("Vision", "Quartz"))
+    monkeypatch.setattr(ocr, "_tesseract", lambda: "/usr/bin/tesseract")
+    assert ocr.backend() == "vision"
+
+
+def test_clipboard_needs_a_session_not_just_a_binary(monkeypatch):
+    """xclip on PATH in a headless box would otherwise advertise a button that
+    fails every time it is pressed."""
+    from gifhole import clipboard
+
+    monkeypatch.setattr(clipboard, "_load_appkit", lambda: None)
+    monkeypatch.setattr(clipboard.shutil, "which", lambda _: "/usr/bin/xclip")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    assert clipboard.backend() == ""
+
+    monkeypatch.setenv("DISPLAY", ":0")
+    assert clipboard.backend() == "uri-list"
+
+
+def test_clipboard_says_what_is_needed_when_there_is_nothing(monkeypatch, tmp_path):
+    from gifhole import clipboard
+
+    gif = tmp_path / "a.gif"
+    gif.write_bytes(make_gif())
+    monkeypatch.setattr(clipboard, "_load_appkit", lambda: None)
+    monkeypatch.setattr(clipboard, "_linux_tool", lambda: None)
+    with pytest.raises(RuntimeError, match="wl-copy/xclip"):
+        clipboard.copy_file(gif)

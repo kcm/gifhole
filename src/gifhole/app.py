@@ -64,7 +64,7 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
 
     def queue_ocr(gif_id: int, filename: str) -> None:
         """Read burned-in text in the background; failures are never fatal."""
-        if not auto_ocr or not ocr.vision_available():
+        if not auto_ocr or not ocr.available():
             return
 
         def run(job):
@@ -352,8 +352,8 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
         gif = store.get(gif_id)
         if gif is None:
             raise HTTPException(404, "no such gif")
-        if not ocr.vision_available():
-            raise HTTPException(503, "OCR needs macOS Vision, which is unavailable here")
+        if not ocr.available():
+            raise HTTPException(503, "no OCR engine available; install tesseract")
         queue_ocr(gif.id, gif.filename)
         return JSONResponse({"ok": True})
 
@@ -494,7 +494,8 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
                 "jobs": [j.as_dict() for j in jobs.list_jobs()[:20]],
                 "active": jobs.active(),
                 "capabilities": {
-                    "ocr": ocr.vision_available(),
+                    "ocr": ocr.available(),
+                    "ocr_engine": ocr.backend(),
                     "enrich": enrich_ok,
                     "enrich_reason": enrich_why,
                     "ffmpeg": fetch.ffmpeg_available(),
