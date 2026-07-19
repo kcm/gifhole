@@ -319,6 +319,7 @@ button.primary {
   display: flex;
   gap: 8px;
   align-items: center;
+  max-width: calc(100vw - 24px);
   padding: 8px 12px;
   background: var(--panel);
   border: 1px solid var(--rule);
@@ -329,6 +330,35 @@ button.primary {
 .bulkcount {
   font-size: 13px;
   color: var(--panel-ink);
+  white-space: nowrap;
+}
+
+/* The bar is a fixed-width strip, so its buttons must not wrap their labels
+   onto three lines when the tag field takes up room. */
+.bulk button {
+  white-space: nowrap;
+  flex: none;
+}
+
+/* Anchors the suggestion list, which has to open upward: the bar itself sits
+   at the bottom of the window. */
+.bulkfield {
+  position: relative;
+  display: flex;
+  min-width: 12em;
+}
+
+.bulkfield .taginput {
+  border-bottom: 1px dashed var(--rule);
+}
+
+.ac.up {
+  top: auto;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 4px;
+  min-width: 12em;
 }
 
 /* -- the trash ------------------------------------------------------------- */

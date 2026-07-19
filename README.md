@@ -41,6 +41,7 @@ Esc       back out one layer     t        edit tags
 a   add GIFs      R  rescan
 g   grab a URL    ?  this list   Space v  select for bulk actions
                                  A        select all, or none
+                                 t        tag everything selected
                                  x        move selected to trash
                                  z        undo the last removal
                                  T        open the trash
@@ -72,6 +73,22 @@ carries an always-open field: click it, or hover the card and press **`t`**.
 
 Nothing here reloads the page, so you can work down a wall of GIFs without
 losing your place. Tag counts in the header update as you go.
+
+### Tagging a batch
+
+Filing a freshly scraped thread one GIF at a time is the slow way. Tick several
+with `Space` (or the checkbox on each card), then press `t`: the same field
+appears in the bulk bar, with the same suggestions, and applies to everything
+selected at once.
+
+- **`-tag`** removes instead of adding, which is the only way to take a tag off
+  a batch. `funny -todo` does both in one go
+- adding is a **union**, so filing 40 GIFs under *reaction* never wipes what
+  each was already tagged with
+- the selection **stays** after applying, so tagging the same batch *reaction*
+  then *meme* is two keystrokes apart, not two rounds of re-selecting
+- the toast reports what actually changed (`+funny on 12 of 40`), so re-applying
+  a tag most of them already had reads as `0 of 40` rather than pretending
 
 ## Finding GIFs by what's in them
 

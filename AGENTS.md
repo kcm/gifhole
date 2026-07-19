@@ -164,6 +164,19 @@ stray request cannot empty it.
   every card, throwing away scroll position and focus mid-file. Tag-bar counts
   are instead adjusted locally by `bumpTag()`, which a later `load()`
   reconciles against the server's authoritative numbers.
+- **One tag field, two mounts.** `tagInput()` is shared by the per-card editor
+  and the bulk bar deliberately: a bulk field without suggestions would be the
+  fastest possible way to invent the near-duplicate tags autocomplete exists to
+  prevent. Don't fork it. The differences are options: `scoped` limits `-`
+  suggestions to the card's own tags, and `current()` returns `[]` for bulk
+  because there is no single set to exclude.
+- **Bulk adds are a union, never a replace** (`store.retag`). Filing 40 GIFs
+  under one tag must not wipe what each already had. `retag` also returns only
+  the ids that changed, so the toast can say `0 of 40` honestly instead of
+  implying work that did not happen.
+- **`t` and `x` both mean "the marked set, or the current GIF"** (`actionIds()`).
+  Keep new bulk actions on that rule rather than inventing a second key: the
+  shortcut should not change depending on whether you are batching.
 - **Separators are handled on `input`, not `keydown`.** Committing a tag on a
   space *keypress* silently ignores paste, autofill and IME input, none of which
   fire a keydown. Watching the value means pasting `funny reaction dog` files

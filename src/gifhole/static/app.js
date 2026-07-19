@@ -212,8 +212,168 @@ function bumpTag(tag, delta) {
 
 // Mirrors split_tags() on the server, so what you see on the chip is what got
 // stored: lowercased, split on whitespace and commas.
-function splitTags(raw) {
+function tokenize(raw) {
   return raw.toLowerCase().replace(/,/g, " ").split(/\s+/).filter(Boolean);
+}
+
+// A leading "-" removes instead of adds. That is the only way to take a tag off
+// a whole batch at once; per card you would just click the chip's x.
+function parseTags(raw) {
+  const add = [];
+  const remove = [];
+  for (const token of tokenize(raw)) {
+    if (token[0] !== "-") add.push(token);
+    else if (token.length > 1) remove.push(token.slice(1));
+  }
+  return { add, remove };
+}
+
+// The suggesting tag field, shared by the per-card editor and the bulk bar.
+// Sharing it is the point: a bulk field with no suggestions would become the
+// fastest way to invent the near-duplicate tags autocomplete exists to prevent.
+//
+// opts.current()   tags already on the target ([] when there is no single one)
+// opts.scoped      restrict "-" suggestions to current(); false suggests all
+// opts.commit(add, remove)
+// opts.onOpen/onClose, opts.onBackspaceEmpty  optional
+function tagInput(input, acEl, opts) {
+  let items = [];
+  let cursor = -1;
+
+  const close = () => {
+    acEl.hidden = true;
+    items = [];
+    cursor = -1;
+    opts.onClose?.();
+  };
+
+  const paint = () => {
+    [...acEl.children].forEach((li, i) => li.classList.toggle("on", i === cursor));
+  };
+
+  const open = () => {
+    const raw = input.value.trim().toLowerCase();
+    const removing = raw.startsWith("-");
+    const typed = removing ? raw.slice(1) : raw;
+    const have = opts.current();
+    // Removing offers what you have; adding offers what you don't. Unscoped
+    // (the bulk bar) there is no single "have", so everything is on offer.
+    const pool = state.tags
+      .filter(({ tag }) => {
+        if (!tag.includes(typed)) return false;
+        if (!removing) return !have.includes(tag);
+        return opts.scoped ? have.includes(tag) : true;
+      })
+      .sort((a, b) => {
+        const ap = a.tag.startsWith(typed);
+        const bp = b.tag.startsWith(typed);
+        if (ap !== bp) return ap ? -1 : 1;
+        return b.count - a.count || a.tag.localeCompare(b.tag);
+      })
+      .slice(0, 8);
+    items = pool.map((p) => (removing ? `-${p.tag}` : p.tag));
+    if (!items.length) return close();
+    acEl.replaceChildren(
+      ...pool.map(({ tag, count }, i) => {
+        const li = document.createElement("li");
+        li.className = "acitem";
+        const n = document.createElement("span");
+        n.className = "acn";
+        n.textContent = count;
+        li.append(removing ? `remove ${tag}` : tag, n);
+        // mousedown, not click: click fires after blur, which would have
+        // already closed the list out from under the pointer.
+        li.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          commit(items[i]);
+        });
+        li.addEventListener("mouseenter", () => {
+          cursor = i;
+          paint();
+        });
+        return li;
+      }),
+    );
+    acEl.hidden = false;
+    opts.onOpen?.();
+    cursor = -1;
+    paint();
+  };
+
+  const apply = (raw) => {
+    const { add, remove } = parseTags(raw);
+    if (add.length || remove.length) opts.commit(add, remove);
+  };
+
+  const commit = (value) => {
+    apply(value);
+    input.value = "";
+    close();
+    input.focus();
+  };
+
+  input.addEventListener("focus", open);
+
+  // A separator commits, and it is handled here rather than on keydown so that
+  // paste, autofill and IME input work too: those deliver text with no keydown
+  // at all. Pasting "reaction meme dog" therefore files two and leaves "dog"
+  // in the field, still editable.
+  input.addEventListener("input", () => {
+    if (/[\s,]/.test(input.value)) {
+      const finished = /[\s,]$/.test(input.value);
+      const parts = tokenize(input.value);
+      const remainder = finished ? "" : (parts.pop() ?? "");
+      if (parts.length) apply(parts.join(" "));
+      input.value = remainder;
+    }
+    open();
+  });
+
+  input.addEventListener("blur", () => {
+    // Commit rather than discard: typing a tag and clicking away should file
+    // it, not throw it out silently.
+    if (input.value.trim()) {
+      apply(input.value);
+      input.value = "";
+    }
+    close();
+  });
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (acEl.hidden) return open();
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      if (cursor < 0) cursor = step > 0 ? 0 : items.length - 1;
+      else cursor = (cursor + step + items.length) % items.length;
+      paint();
+      return;
+    }
+    // Space and comma are not listed here on purpose; the input handler above
+    // catches them, so every route into the field behaves the same.
+    if (e.key === "Enter" || e.key === "Tab") {
+      const picked = cursor >= 0 ? items[cursor] : input.value.trim();
+      if (!picked) {
+        if (e.key === "Enter") input.blur();
+        return;
+      }
+      e.preventDefault();
+      commit(picked);
+      return;
+    }
+    if (e.key === "Escape") {
+      // Stop the global handler, which would otherwise wipe search and filters
+      // just because you backed out of a suggestion list.
+      e.stopPropagation();
+      if (!acEl.hidden) return close();
+      input.value = "";
+      input.blur();
+      return;
+    }
+    if (e.key === "Backspace" && !input.value) opts.onBackspaceEmpty?.(e);
+  });
+
+  return { open, close };
 }
 
 function tagEditor(el, gif) {
@@ -221,8 +381,6 @@ function tagEditor(el, gif) {
   const input = el.querySelector(".taginput");
   const acEl = el.querySelector(".ac");
   let tags = [...gif.tags];
-  let items = [];
-  let cursor = -1;
 
   // Serialised: each PATCH carries the whole tag list, so two in flight at once
   // could land out of order and resurrect a tag that was just removed.
@@ -264,7 +422,7 @@ function tagEditor(el, gif) {
 
   const add = (raw) => {
     let changed = false;
-    for (const tag of splitTags(raw)) {
+    for (const tag of tokenize(raw)) {
       if (tags.includes(tag)) continue;
       tags.push(tag);
       bumpTag(tag, +1);
@@ -285,130 +443,22 @@ function tagEditor(el, gif) {
     save();
   };
 
-  const closeAc = () => {
-    acEl.hidden = true;
-    items = [];
-    cursor = -1;
-    el.classList.remove("tagging");
-  };
-
-  const paint = () => {
-    [...acEl.children].forEach((li, i) => li.classList.toggle("on", i === cursor));
-  };
-
-  // Suggesting from the existing vocabulary is the point of the whole control:
-  // it is what stops "reaction" and "reactions" becoming two shelves holding
-  // half the collection each. Prefix matches rank above substring, then by use.
-  const openAc = () => {
-    const typed = input.value.trim().toLowerCase();
-    const pool = state.tags
-      .filter(({ tag }) => !tags.includes(tag) && tag.includes(typed))
-      .sort((a, b) => {
-        const ap = a.tag.startsWith(typed);
-        const bp = b.tag.startsWith(typed);
-        if (ap !== bp) return ap ? -1 : 1;
-        return b.count - a.count || a.tag.localeCompare(b.tag);
-      })
-      .slice(0, 8);
-    items = pool.map((p) => p.tag);
-    if (!items.length) return closeAc();
-    acEl.replaceChildren(
-      ...pool.map(({ tag, count }, i) => {
-        const li = document.createElement("li");
-        li.className = "acitem";
-        const n = document.createElement("span");
-        n.className = "acn";
-        n.textContent = count;
-        li.append(tag, n);
-        // mousedown, not click: click fires after blur, which would have
-        // already closed the list out from under the pointer.
-        li.addEventListener("mousedown", (e) => {
-          e.preventDefault();
-          commit(tag);
-        });
-        li.addEventListener("mouseenter", () => {
-          cursor = i;
-          paint();
-        });
-        return li;
-      }),
-    );
-    acEl.hidden = false;
+  tagInput(input, acEl, {
+    current: () => tags,
+    scoped: true,
+    commit: (toAdd, toRemove) => {
+      toRemove.forEach(remove);
+      if (toAdd.length) add(toAdd.join(" "));
+    },
     // .card clips its contents so the figure keeps square corners; the dropdown
     // has to escape that box, but only while this card is being tagged.
-    el.classList.add("tagging");
-    cursor = -1;
-    paint();
-  };
-
-  const commit = (value) => {
-    add(value);
-    input.value = "";
-    closeAc();
-    input.focus();
-  };
-
-  input.addEventListener("focus", openAc);
-
-  // A separator commits, and it is handled here rather than on keydown so that
-  // paste, autofill and IME input work too: those deliver text with no keydown
-  // at all. Pasting "reaction meme dog" therefore lands two chips and leaves
-  // "dog" in the field, still editable.
-  input.addEventListener("input", () => {
-    if (/[\s,]/.test(input.value)) {
-      const finished = /[\s,]$/.test(input.value);
-      const parts = splitTags(input.value);
-      const remainder = finished ? "" : (parts.pop() ?? "");
-      if (parts.length) add(parts.join(" "));
-      input.value = remainder;
-    }
-    openAc();
-  });
-  input.addEventListener("blur", () => {
-    // Commit rather than discard: typing a tag and clicking away should file
-    // it, not throw it out silently.
-    if (input.value.trim()) {
-      add(input.value);
-      input.value = "";
-    }
-    closeAc();
-  });
-
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      if (acEl.hidden) return openAc();
-      const step = e.key === "ArrowDown" ? 1 : -1;
-      if (cursor < 0) cursor = step > 0 ? 0 : items.length - 1;
-      else cursor = (cursor + step + items.length) % items.length;
-      paint();
-      return;
-    }
-    // Space and comma are not listed here on purpose; the input handler above
-    // catches them, so every route into the field behaves the same.
-    if (e.key === "Enter" || e.key === "Tab") {
-      const picked = cursor >= 0 ? items[cursor] : input.value.trim();
-      if (!picked) {
-        if (e.key === "Enter") input.blur();
-        return;
-      }
-      e.preventDefault();
-      commit(picked);
-      return;
-    }
-    if (e.key === "Escape") {
-      // Stop the global handler, which would otherwise wipe search and filters
-      // just because you backed out of a suggestion list.
-      e.stopPropagation();
-      if (!acEl.hidden) return closeAc();
-      input.value = "";
-      input.blur();
-      return;
-    }
-    if (e.key === "Backspace" && !input.value && tags.length) {
+    onOpen: () => el.classList.add("tagging"),
+    onClose: () => el.classList.remove("tagging"),
+    onBackspaceEmpty: (e) => {
+      if (!tags.length) return;
       e.preventDefault();
       remove(tags[tags.length - 1]);
-    }
+    },
   });
 
   renderChips();
@@ -1077,8 +1127,39 @@ $("#trashempty").addEventListener("click", async () => {
   openTrash();
 });
 
-$("#bulktrash").addEventListener("click", () => trashIds([...marked]));
+$("#bulktrash").addEventListener("click", () => {
+  const ids = [...marked];
+  if (ids.length > 1 && !confirm(`Move ${ids.length} GIFs to the trash?`)) return;
+  trashIds(ids);
+});
 $("#bulkclear").addEventListener("click", clearMarks);
+
+// Filing a scraped batch is the case this exists for, so it keeps the marks
+// after applying: tagging 40 GIFs "reaction" then "meme" is two keystrokes
+// apart, not two rounds of re-selecting.
+tagInput($("#bulktag"), $("#bulkac"), {
+  current: () => [],
+  scoped: false,
+  commit: async (add, remove) => {
+    const ids = [...marked];
+    if (!ids.length) return;
+    const out = await postJSON("/api/gifs/tag", {
+      ids,
+      add: add.join(" "),
+      remove: remove.join(" "),
+    });
+    const what = [
+      add.length ? `+${add.join(" +")}` : "",
+      remove.length ? `-${remove.join(" -")}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    toast(`${what} on ${out.changed} of ${out.asked}`);
+    // Counts and chips both come from the server here rather than being
+    // adjusted locally: a batch touches too many rows to keep in step by hand.
+    load();
+  },
+});
 $("#clearall").addEventListener("click", async () => {
   const total = state.gifs.length;
   if (!total) return toast("nothing to clear");
@@ -1103,7 +1184,9 @@ const CARD_KEYS = {
   Enter: (t) => copyGif(t.gif, t.el, "gif"),
   u: (t) => copyGif(t.gif, t.el, "url"),
   p: (t) => copyGif(t.gif, t.el, "path"),
-  t: (t) => t.el.querySelector(".taginput").focus(),
+  // Same rule as x: act on the marked set when there is one, otherwise on the
+  // current GIF. So "t" is always "tag what I mean", never a different key.
+  t: (t) => (marked.size ? $("#bulktag").focus() : t.el.querySelector(".taginput").focus()),
   r: (t) => {
     const name = t.el.querySelector(".name");
     name.focus();

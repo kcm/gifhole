@@ -96,7 +96,12 @@
 
 <div id="bulk" class="bulk" hidden>
   <span id="bulkcount" class="bulkcount"></span>
-  <button id="bulktrash" class="primary">Move to trash</button>
+  <span class="bulkfield">
+    <input id="bulktag" class="taginput" spellcheck="false" autocomplete="off"
+           placeholder="tag all, -tag removes" aria-label="tag every selected GIF">
+    <ul id="bulkac" class="ac up" hidden></ul>
+  </span>
+  <button id="bulktrash">Move to trash</button>
   <button id="bulkclear">Deselect</button>
 </div>
 
@@ -146,6 +151,7 @@
         <dl>
           <dt><kbd>Space</kbd> <kbd>v</kbd></dt><dd>select for bulk actions</dd>
           <dt><kbd>A</kbd></dt><dd>select all, or none</dd>
+          <dt><kbd>t</kbd></dt><dd>tag everything selected</dd>
           <dt><kbd>x</kbd></dt><dd>move selected to trash</dd>
           <dt><kbd>z</kbd></dt><dd>undo the last removal</dd>
           <dt><kbd>T</kbd></dt><dd>open the trash</dd>

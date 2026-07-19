@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from gifhole import clipboard, fetch, ocr
 from gifhole.jobs import JobQueue
-from gifhole.store import Store
+from gifhole.store import Store, split_tags
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
@@ -150,6 +150,22 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
         ids = [i for i in (payload.get("ids") or []) if isinstance(i, int)]
         trashed = [name for i in ids if (name := store.remove(i)) is not None]
         return JSONResponse({"ok": True, "removed": len(trashed), "trashed": trashed})
+
+    @app.post("/api/gifs/tag")
+    def tag_many(payload: dict) -> JSONResponse:
+        """Tag a batch in one request.
+
+        Filing a scraped thread is the case this exists for: doing it per GIF
+        would be one round trip each, and the point of a bulk action is that it
+        costs about the same as tagging one.
+        """
+        ids = [i for i in (payload.get("ids") or []) if isinstance(i, int)]
+        add = split_tags(payload.get("add") or "")
+        remove = split_tags(payload.get("remove") or "")
+        if not ids or not (add or remove):
+            raise HTTPException(400, "need ids and at least one tag")
+        changed = store.retag(ids, add, remove)
+        return JSONResponse({"ok": True, "changed": len(changed), "asked": len(ids)})
 
     @app.post("/api/gifs/clear")
     def clear_all(payload: dict) -> JSONResponse:

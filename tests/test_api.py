@@ -174,3 +174,65 @@ def test_purge_cannot_reach_outside_the_trash(client):
     res = client.post("/api/trash/purge", json={"names": ["../gifs/safe.gif"]})
     assert res.json()["purged"] == 0
     assert client.get("/api/gifs").json()["gifs"][0]["id"] == gif_id
+
+
+# -- bulk tagging ------------------------------------------------------------
+
+
+def test_bulk_tag_adds_without_replacing_existing_tags(client):
+    a = client.post(
+        "/api/gifs", files={"file": ("a.gif", make_gif(), "image/gif")}, data={"tags": "cat"}
+    ).json()["id"]
+    b = client.post("/api/gifs", files={"file": ("b.gif", make_gif(), "image/gif")}).json()["id"]
+    res = client.post("/api/gifs/tag", json={"ids": [a, b], "add": "reaction meme"})
+    assert res.json()["changed"] == 2
+    by_name = {g["filename"]: g["tags"] for g in client.get("/api/gifs").json()["gifs"]}
+    assert by_name["a.gif"] == ["cat", "reaction", "meme"]
+    assert by_name["b.gif"] == ["reaction", "meme"]
+
+
+def test_bulk_tag_removes(client):
+    ids = [
+        client.post(
+            "/api/gifs",
+            files={"file": (f"r{i}.gif", make_gif(), "image/gif")},
+            data={"tags": "todo keep"},
+        ).json()["id"]
+        for i in range(2)
+    ]
+    client.post("/api/gifs/tag", json={"ids": ids, "remove": "todo"})
+    for gif in client.get("/api/gifs").json()["gifs"]:
+        assert gif["tags"] == ["keep"]
+
+
+def test_bulk_tag_can_add_and_remove_in_one_call(client):
+    gif_id = client.post(
+        "/api/gifs", files={"file": ("s.gif", make_gif(), "image/gif")}, data={"tags": "old"}
+    ).json()["id"]
+    client.post("/api/gifs/tag", json={"ids": [gif_id], "add": "new", "remove": "old"})
+    assert client.get("/api/gifs").json()["gifs"][0]["tags"] == ["new"]
+
+
+def test_bulk_tag_reports_only_what_actually_changed(client):
+    """Re-applying a tag every GIF already has must not count as a write."""
+    gif_id = client.post(
+        "/api/gifs", files={"file": ("t.gif", make_gif(), "image/gif")}, data={"tags": "same"}
+    ).json()["id"]
+    res = client.post("/api/gifs/tag", json={"ids": [gif_id], "add": "same"})
+    assert res.json() == {"ok": True, "changed": 0, "asked": 1}
+
+
+def test_bulk_tag_needs_ids_and_tags(client):
+    gif_id = client.post("/api/gifs", files={"file": ("u.gif", make_gif(), "image/gif")}).json()[
+        "id"
+    ]
+    assert client.post("/api/gifs/tag", json={"ids": [], "add": "x"}).status_code == 400
+    assert client.post("/api/gifs/tag", json={"ids": [gif_id], "add": "  "}).status_code == 400
+
+
+def test_bulk_tag_skips_ids_that_are_gone(client):
+    gif_id = client.post("/api/gifs", files={"file": ("v.gif", make_gif(), "image/gif")}).json()[
+        "id"
+    ]
+    res = client.post("/api/gifs/tag", json={"ids": [gif_id, 9999], "add": "here"})
+    assert res.json() == {"ok": True, "changed": 1, "asked": 2}

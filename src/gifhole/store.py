@@ -231,6 +231,31 @@ class Store:
         )
         self.db.commit()
 
+    def retag(
+        self, ids: list[int], add: list[str] | tuple[str, ...] = (), remove: list[str] = ()
+    ) -> list[int]:
+        """Add and remove tags across many GIFs in one pass.
+
+        Adding is a union, not a replace: filing a batch under "reaction" must
+        not wipe whatever each one was already tagged with. Returns the ids
+        that actually changed, so an unchanged GIF costs no write.
+        """
+        drop = set(remove)
+        wanted = list(dict.fromkeys(add))
+        changed = []
+        for gif_id in ids:
+            gif = self.get(gif_id)
+            if gif is None:
+                continue
+            tags = [t for t in gif.tags if t not in drop]
+            tags += [t for t in wanted if t not in tags]
+            if tags == gif.tags:
+                continue
+            self.db.execute("UPDATE gifs SET tags = ? WHERE id = ?", (" ".join(tags), gif_id))
+            changed.append(gif_id)
+        self.db.commit()
+        return changed
+
     def needing_ocr(self) -> list[Gif]:
         return [g for g in self.list_gifs() if not g.ocr_at]
 
