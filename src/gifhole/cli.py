@@ -128,6 +128,12 @@ def main() -> None:
         help="require this token on every request (or set GIFHOLE_TOKEN). "
         "Off by default; needed if you expose gifhole beyond loopback",
     )
+    parser.add_argument(
+        "--read-token",
+        default="",
+        help="a second token that can look but not touch (or GIFHOLE_READ_TOKEN). "
+        "Needs --token as well, or it would do nothing",
+    )
     # Optional on purpose: bare `gifhole` still means "serve the library", so
     # the subparser must not be required.
     commands = parser.add_subparsers(dest="command")
@@ -149,12 +155,21 @@ def main() -> None:
         # The reload path rebuilds the app in a subprocess and cannot be handed
         # arguments, so the token travels the same way --root does.
         os.environ["GIFHOLE_TOKEN"] = args.token
+    if args.read_token:
+        os.environ["GIFHOLE_READ_TOKEN"] = args.read_token
     if _configured_token(args.token):
         print(f"        access: token required, add ?token=... to {url} once", flush=True)
 
     common = {"host": args.host, "port": port, "log_level": "warning"}
     if not args.reload:
-        uvicorn.run(create_app(args.root, token=args.token or None), **common)
+        uvicorn.run(
+            create_app(
+                args.root,
+                token=args.token or None,
+                read_token=args.read_token or None,
+            ),
+            **common,
+        )
         return
 
     # The reloader rebuilds the app in a subprocess, so it can only be handed an

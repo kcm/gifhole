@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import shutil
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from gifhole import __version__, clipboard, fetch, ocr
 from gifhole.jobs import JobQueue
 from gifhole.store import Store, split_tags
+
+log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -40,15 +43,35 @@ def display_path(path: Path) -> str:
 
 COOKIE = "gifhole_token"
 
+# Anything that cannot change the library. Everything else is a write, which
+# is a deliberately blunt rule: classifying route by route means every new
+# route is a chance to forget, and forgetting defaults to letting a reader
+# write.
+READ_ONLY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
 
 def configured_token(explicit: str | None = None) -> str:
     return explicit or os.environ.get("GIFHOLE_TOKEN", "")
 
 
+def configured_read_token(explicit: str | None = None) -> str:
+    return explicit or os.environ.get("GIFHOLE_READ_TOKEN", "")
+
+
 def create_app(
-    root: Path | None = None, *, auto_ocr: bool = True, token: str | None = None
+    root: Path | None = None,
+    *,
+    auto_ocr: bool = True,
+    token: str | None = None,
+    read_token: str | None = None,
 ) -> FastAPI:
     token = configured_token(token)
+    read_token = configured_read_token(read_token)
+    # A read token on its own would be worse than none: writes would still be
+    # wide open while the config looked like it said otherwise.
+    if read_token and not token:
+        log.warning("GIFHOLE_READ_TOKEN ignored: it does nothing without GIFHOLE_TOKEN")
+        read_token = ""
     store = Store(root or default_root())
     store.rescan()
     jobs = JobQueue()
@@ -89,11 +112,22 @@ def create_app(
         )
         # compare_digest, not ==, so a wrong guess takes the same time to
         # reject however much of it was right.
-        if not (offered and secrets.compare_digest(offered, token)):
+        writer = bool(offered) and secrets.compare_digest(offered, token)
+        reader = bool(offered and read_token) and secrets.compare_digest(offered, read_token)
+
+        if not (writer or reader):
             return JSONResponse(
                 {"detail": "a token is required; add ?token=... once, or an Authorization header"},
                 status_code=401,
             )
+        if reader and request.method not in READ_ONLY_METHODS:
+            return JSONResponse(
+                {"detail": "that token can look, not touch"},
+                status_code=403,
+            )
+        # Recorded so a route can report it; the UI hides what it cannot do
+        # rather than offering buttons that come back 403.
+        request.state.read_only = reader
 
         response = await call_next(request)
         if request.query_params.get("token"):
@@ -546,7 +580,7 @@ def create_app(
         return JSONResponse({"ok": True, "cancelled": stopped})
 
     @app.get("/api/jobs")
-    def list_jobs() -> JSONResponse:
+    def list_jobs(request: Request) -> JSONResponse:
         from gifhole import enrich
 
         enrich_ok, enrich_why = enrich.available()
@@ -562,6 +596,7 @@ def create_app(
                     "ffmpeg": fetch.ffmpeg_available(),
                     "file_clipboard": clipboard.available(),
                     "version": __version__,
+                    "read_only": getattr(request.state, "read_only", False),
                 },
             }
         )

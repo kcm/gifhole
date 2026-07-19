@@ -60,6 +60,11 @@ losing anything. Anything that would break that is a major change.
   the DOM while Reddit still benefits from server-side scraping. Navigates
   rather than calling the API, so it needs no CORS exception and no
   extension.
+- **Read-only token** (`--read-token`, `GIFHOLE_READ_TOKEN`) so a library can
+  be shared without handing over the ability to change it. Anything that is not
+  a read is refused, and the interface hides the controls a guest cannot use.
+  Requires the write token; alone it is ignored with a warning, since it would
+  otherwise look like access control while leaving writes open.
 - **Optional shared token** (`--token`, `GIFHOLE_TOKEN`) for running gifhole
   somewhere other than the machine you are sitting at. Off by default, so a
   loopback install is unchanged. Covers every route including `/gifs/*`;

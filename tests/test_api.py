@@ -496,3 +496,57 @@ def test_the_token_can_come_from_the_environment(tmp_path, monkeypatch):
     client = TestClient(create_app(tmp_path, auto_ocr=False))
     assert client.get("/api/gifs").status_code == 401
     assert client.get("/api/gifs", headers={"Authorization": "Bearer from-env"}).status_code == 200
+
+
+# -- read-only token ---------------------------------------------------------
+
+
+@pytest.fixture
+def shared(tmp_path):
+    """A library with a writer token and a look-but-not-touch token."""
+    from gifhole.app import create_app
+
+    return TestClient(create_app(tmp_path, auto_ocr=False, token="owner", read_token="guest"))
+
+
+def _as(client, token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_a_reader_can_browse(shared):
+    assert shared.get("/api/gifs", headers=_as(shared, "guest")).status_code == 200
+    assert shared.get("/api/jobs", headers=_as(shared, "guest")).status_code == 200
+
+
+def test_a_reader_cannot_change_anything(shared):
+    """Blunt on purpose: anything that is not a read is refused, so a new route
+    cannot quietly become writable by a guest."""
+    guest = _as(shared, "guest")
+    assert shared.post("/api/gifs/delete", json={"ids": [1]}, headers=guest).status_code == 403
+    assert (
+        shared.post("/api/gifs/clear", json={"confirm": "clear"}, headers=guest).status_code == 403
+    )
+    assert shared.patch("/api/gifs/1", json={"tags": "x"}, headers=guest).status_code == 403
+    assert shared.post("/api/rescan", headers=guest).status_code == 403
+    assert shared.delete("/api/gifs/1", headers=guest).status_code == 403
+
+
+def test_the_owner_token_still_writes(shared):
+    assert shared.post("/api/rescan", headers=_as(shared, "owner")).status_code == 200
+
+
+def test_a_reader_is_told_which_it_is(shared):
+    """So the UI can hide what it cannot do instead of offering 403s."""
+    caps = shared.get("/api/jobs", headers=_as(shared, "guest")).json()["capabilities"]
+    assert caps["read_only"] is True
+    caps = shared.get("/api/jobs", headers=_as(shared, "owner")).json()["capabilities"]
+    assert caps["read_only"] is False
+
+
+def test_a_read_token_alone_does_nothing(tmp_path):
+    """It would otherwise read as configured while leaving writes wide open."""
+    from gifhole.app import create_app
+
+    client = TestClient(create_app(tmp_path, auto_ocr=False, read_token="guest"))
+    assert client.get("/api/gifs").status_code == 200
+    assert client.get("/api/gifs", headers={"Authorization": "Bearer guest"}).status_code == 200

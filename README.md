@@ -312,9 +312,27 @@ carry an `Authorization` header. Scripts can use `Authorization: Bearer ...`
 instead. Every route is covered, including `/gifs/*`, since those files are
 the data.
 
-The token is a shared secret over plain HTTP, so it is only as private as the
-network. For anything beyond a trusted LAN, put it behind a reverse proxy with
-TLS, or on a private network like Tailscale.
+### Letting someone else look
+
+A second token can browse but not change anything:
+
+```
+gifhole --host 0.0.0.0 --token "$(openssl rand -hex 24)" \
+                       --read-token "$(openssl rand -hex 24)"
+```
+
+Give friends the read token. They can search, browse and copy; they cannot
+add, tag, delete, describe or reach the library panel, and the interface hides
+those controls rather than offering buttons that fail. The rule is blunt on
+purpose: anything that is not a `GET` is refused, so a route added later cannot
+quietly become writable by a guest.
+
+`--read-token` needs `--token` as well. On its own it would read like access
+control while leaving every write wide open, so it is ignored with a warning.
+
+The tokens are shared secrets over plain HTTP, so they are only as private as
+the network. For anything beyond a trusted LAN, put it behind a reverse proxy
+with TLS, or on a private network like Tailscale.
 
 ## Moving the library
 

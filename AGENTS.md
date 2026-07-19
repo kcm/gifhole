@@ -111,6 +111,11 @@ stray request cannot empty it.
   `refuse_cross_site_writes`, correctly. Opening `/?add=<url>` is a plain GET
   and needs no exception carved into that middleware; don't add one. `?add=` is
   stripped from the address bar on arrival so a refresh cannot re-import.
+- **Read-only is decided by HTTP method, not by a list of routes.** Anything
+  outside `READ_ONLY_METHODS` is refused for a read token. Enumerating writable
+  routes would mean every new route is a chance to forget, and forgetting would
+  default to letting a guest write. If a new route mutates via `GET`, that is
+  the bug, not this rule.
 - **The token guard covers `/gifs/*` too, and that is not optional.** Those
   files are the data; protecting the API while serving the GIFs to anyone who
   asks would be theatre. It also has to be accepted as a cookie, because an

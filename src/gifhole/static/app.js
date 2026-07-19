@@ -187,6 +187,7 @@ function card(gif) {
   desc.addEventListener("blur", saveDesc);
 
   const describe = el.querySelector(".describe");
+  if (describe) {
   describe.disabled = !capabilities.enrich;
   if (!capabilities.enrich) describe.title = capabilities.enrich_reason || "unavailable";
   if (gif.description && gif.ocr_text) describe.textContent = "redescribe";
@@ -197,6 +198,7 @@ function card(gif) {
     else toast(`describe failed: ${(await res.json()).detail || res.status}`);
     pollJobs();
   });
+  }
 
   const name = el.querySelector(".name");
   name.textContent = gif.title || gif.filename.replace(/\.gif$/, "");
@@ -212,10 +214,18 @@ function card(gif) {
   // and focus mid-file.
   tagEditor(el, gif);
 
-  el.querySelector(".mark").addEventListener("click", () => toggleMark(gif.id));
+  if (capabilities.read_only) {
+    // Copying still works, which is the point of sharing a library at all.
+    for (const sel of [".mark", ".del", ".describe", ".taginput"]) {
+      el.querySelector(sel)?.remove();
+    }
+    el.querySelector(".name")?.setAttribute("contenteditable", "false");
+    el.querySelector(".desc")?.setAttribute("contenteditable", "false");
+  }
+  el.querySelector(".mark")?.addEventListener("click", () => toggleMark(gif.id));
   // No confirm on a single delete: it goes to the trash and "z" takes it
   // straight back, so asking every time costs more than the mistake does.
-  el.querySelector(".del").addEventListener("click", () => trashIds([gif.id]));
+  el.querySelector(".del")?.addEventListener("click", () => trashIds([gif.id]));
 
   el.querySelector("figure").addEventListener("click", (e) => {
     // Clicking also moves the keyboard selection, so mouse and keyboard never
@@ -412,6 +422,25 @@ function tagEditor(el, gif) {
   const chipsEl = el.querySelector(".chips");
   const input = el.querySelector(".taginput");
   const acEl = el.querySelector(".ac");
+  // A read-only card has no field; the chips still render, without the x.
+  if (!input) {
+    chipsEl.replaceChildren(
+      ...gif.tags.map((tag) => {
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        const label = document.createElement("button");
+        label.className = "chiplabel";
+        label.textContent = tag;
+        label.addEventListener("click", () => {
+          activeTags.add(tag);
+          load();
+        });
+        chip.append(label);
+        return chip;
+      }),
+    );
+    return;
+  }
   let tags = [...gif.tags];
 
   // Serialised: each PATCH carries the whole tag list, so two in flight at once
@@ -1302,6 +1331,7 @@ async function pollJobs() {
     return;
   }
   capabilities = body.capabilities;
+  applyReadOnly();
   resolveCaps();
   renderJobs(body.jobs);
 
@@ -1325,6 +1355,18 @@ async function pollJobs() {
 
   clearTimeout(jobTimer);
   if (body.active > 0) jobTimer = setTimeout(pollJobs, 700);
+}
+
+// A guest token can browse and copy but not change anything. The controls it
+// cannot use are hidden rather than left to fail: a button that returns 403 is
+// worse than one that is not there.
+function applyReadOnly() {
+  const readOnly = !!capabilities.read_only;
+  document.body.classList.toggle("readonly", readOnly);
+  for (const id of ["#add", "#grab", "#librarybtn"]) {
+    const el = $(id);
+    if (el) el.hidden = readOnly;
+  }
 }
 
 // ---------------------------------------------------------------- chrome

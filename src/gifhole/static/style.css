@@ -1311,3 +1311,13 @@ button.danger {
 .bookmarklet:active {
   cursor: grabbing;
 }
+
+/* Someone browsing with a look-but-not-touch token. The controls they cannot
+   use are removed rather than disabled, so this says why the page is sparser
+   than they might expect. */
+body.readonly .hint::after {
+  content: " · read only";
+  font-style: normal;
+  font-weight: bold;
+  color: var(--link-hot);
+}
