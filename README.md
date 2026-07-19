@@ -226,6 +226,12 @@ before it runs. Pick *missing tags or description*, *missing a description*,
 many GIFs that covers, and the confirm repeats the number, because it is one
 API call each.
 
+A running batch can be **stopped**: while jobs are queued the strip below the
+toolbar shows how many are waiting and a *stop the rest* button. It cancels
+everything not yet started; the one call already in flight finishes, so it
+stops what you have not paid for rather than pretending to halt instantly.
+Cancelling a 12-GIF run four seconds in avoided 10 of the 12 calls.
+
 Scoping is the point: on a library you have been adding to for months, the
 useful run is usually "the ones I never got round to", not all of it. Tags stay
 in your existing vocabulary either way, so a big run makes the library more

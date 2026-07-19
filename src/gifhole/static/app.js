@@ -1161,6 +1161,37 @@ function renderJobs(jobs) {
       return row;
     }),
   );
+
+  // A queue is the only place a long run is visible, so it is where stopping
+  // one belongs. Only offered when something is actually waiting: with just
+  // one job running there is nothing left to stop.
+  const waiting = interesting.filter((j) => j.status === "queued").length;
+  if (waiting) {
+    const stop = document.createElement("div");
+    stop.className = "job stoprow";
+    const label = document.createElement("span");
+    label.className = "kind";
+    label.textContent = "queued";
+    const count = document.createElement("span");
+    count.className = "what";
+    count.textContent = `${waiting} waiting`;
+    const button = document.createElement("button");
+    button.className = "linkish";
+    button.textContent = "stop the rest";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        const out = await postJSON("/api/jobs/cancel", {});
+        // Says "the rest" everywhere because the running one is not killed.
+        toast(out.cancelled ? `stopped ${out.cancelled} queued` : "nothing left to stop");
+      } catch (err) {
+        toast(`could not stop: ${err.message}`);
+      }
+      pollJobs();
+    });
+    stop.append(label, count, button);
+    jobBar.append(stop);
+  }
 }
 
 async function pollJobs() {

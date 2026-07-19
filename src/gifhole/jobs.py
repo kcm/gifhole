@@ -28,7 +28,7 @@ class Job:
     id: int
     kind: str
     label: str
-    status: str = "queued"  # queued | running | done | error
+    status: str = "queued"  # queued | running | done | error | cancelled
     detail: str = ""
     done: int = 0
     total: int = 0
@@ -60,15 +60,37 @@ class JobQueue:
 
     def _prune(self) -> None:
         finished = sorted(
-            (j for j in self._jobs.values() if j.status in ("done", "error")),
+            (j for j in self._jobs.values() if j.status in ("done", "error", "cancelled")),
             key=lambda j: j.created_at,
         )
         for job in finished[: max(len(finished) - self._keep, 0)]:
             self._jobs.pop(job.id, None)
 
+    def cancel(self, kind: str | None = None) -> int:
+        """Drop everything still queued, optionally only of one kind.
+
+        The job already running is left alone. It is usually mid-API-call or
+        mid-download, and killing a worker thread cleanly is not worth the
+        complexity when the useful promise is "stop spending on the other 150",
+        not "stop this instant". Marked rather than removed from the queue, so
+        the worker skips them and the strip can still show what was cancelled.
+        """
+        stopped = 0
+        with self._lock:
+            for job in self._jobs.values():
+                if job.status == "queued" and (kind is None or job.kind == kind):
+                    job.status = "cancelled"
+                    job.detail = "cancelled"
+                    stopped += 1
+        return stopped
+
     def _run(self) -> None:
         while True:
             job, fn = self._queue.get()
+            # Cancelled while it sat in the queue.
+            if job.status == "cancelled":
+                self._queue.task_done()
+                continue
             job.status = "running"
             try:
                 result = fn(job)

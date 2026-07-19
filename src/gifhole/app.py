@@ -466,6 +466,22 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
 
     # -- jobs ----------------------------------------------------------------
 
+    @app.post("/api/jobs/cancel")
+    def cancel_jobs(payload: dict | None = None) -> JSONResponse:
+        """Stop what has not started yet.
+
+        The point is a long describe run: 150 queued GIFs is 150 billable calls
+        and there was no way to change your mind halfway. The job already
+        running still finishes, so this reports what it actually stopped rather
+        than implying an instant halt.
+        """
+        kind = (payload or {}).get("kind")
+        stopped = jobs.cancel(kind)
+        # A cancelled describe run should not leave the latch set from an
+        # unrelated earlier failure.
+        auth_block["why"] = None
+        return JSONResponse({"ok": True, "cancelled": stopped})
+
     @app.get("/api/jobs")
     def list_jobs() -> JSONResponse:
         from gifhole import enrich

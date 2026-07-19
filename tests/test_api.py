@@ -118,8 +118,13 @@ def _add(client, name="a.gif"):
     duplicate rather than silently creating a second copy, so a helper that
     reused one fixture would stop adding anything after the first call.
     """
+    # force: these tests want a GIF in the library, not a duplicate check. Two
+    # generated fixtures can land close enough to read as near-duplicates, and
+    # then the upload answers with matches and no id.
     res = client.post(
-        "/api/gifs", files={"file": (name, make_textured_gif(next(_seq)), "image/gif")}
+        "/api/gifs",
+        files={"file": (name, make_textured_gif(next(_seq)), "image/gif")},
+        data={"force": "1"},
     )
     return res.json()["id"]
 
@@ -409,3 +414,25 @@ def test_an_unknown_scope_is_refused(client, monkeypatch):
     monkeypatch.setattr(enrich, "available", lambda: (True, ""))
     _add(client, "z.gif")
     assert client.post("/api/gifs/describe", json={"scope": "everything"}).status_code == 400
+
+
+def test_cancel_endpoint_reports_what_it_stopped(client, monkeypatch):
+    """A long describe run must be stoppable: 150 queued GIFs is 150 calls."""
+    from gifhole import enrich
+
+    monkeypatch.setattr(enrich, "available", lambda: (True, ""))
+    # Fail every call, so jobs finish instantly without touching the network
+    # and the queue still has to be drained by cancelling.
+    monkeypatch.setattr(
+        enrich, "describe_gif", lambda *a, **k: (_ for _ in ()).throw(enrich.EnrichError("no"))
+    )
+    for i in range(4):
+        _add(client, f"c{i}.gif")
+    client.post("/api/gifs/describe", json={"scope": "all"})
+    res = client.post("/api/jobs/cancel", json={})
+    assert res.status_code == 200
+    assert res.json()["cancelled"] >= 0
+
+
+def test_cancel_with_nothing_queued_is_harmless(client):
+    assert client.post("/api/jobs/cancel", json={}).json() == {"ok": True, "cancelled": 0}

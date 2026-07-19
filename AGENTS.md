@@ -195,6 +195,12 @@ stray request cannot empty it.
   count. `Rescan`, `Trash` and `clear the library` still exist as
   `.visually-hidden` buttons because the panel and the keyboard shortcuts both
   click them; don't delete them, and don't switch them to `display:none`.
+- **A queued run must always be stoppable.** `JobQueue.cancel()` marks queued
+  jobs cancelled and the worker skips them; the running job is deliberately
+  left alone, because it is mid-API-call and killing a worker thread cleanly
+  is not worth it when the promise that matters is "stop spending on the other
+  150". Cancelled jobs are marked, not dropped from the queue, so the strip can
+  still show what happened. Any new long-running batch needs the same escape.
 - **Scoped runs are counted before they run.** `store.in_scope()` and
   `store.stats()` share one vocabulary of scope names so the number in the
   panel is exactly what will execute. A scoped describe deliberately ignores

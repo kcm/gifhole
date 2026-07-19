@@ -5,6 +5,7 @@ text through the store, which is the contract the rest of the app relies on.
 """
 
 import io
+import threading
 import time
 
 from gifhole.frames import sample_frames, to_png_bytes, upscale_for_ocr
@@ -326,3 +327,54 @@ def test_frame_order_stays_in_range_and_is_deduped():
     assert _frame_order(1) == [0]
     assert all(0 <= i < 12 for i in _frame_order(12))
     assert len(set(_frame_order(12))) == len(_frame_order(12))
+
+
+# -- cancelling a run --------------------------------------------------------
+
+
+def test_cancel_stops_queued_jobs_but_not_the_running_one():
+    """The promise is "stop spending on the rest", not "halt this instant"."""
+    queue = JobQueue()
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow(job):
+        started.set()
+        release.wait(5)
+        return "finished anyway"
+
+    first = queue.submit("describe", "running.gif", slow)
+    rest = [queue.submit("describe", f"queued{i}.gif", lambda job: "ran") for i in range(4)]
+    assert started.wait(5)
+
+    assert queue.cancel() == 4
+    release.set()
+    assert queue.wait_idle(5)
+
+    assert queue.get(first.id).status == "done"
+    assert all(queue.get(j.id).status == "cancelled" for j in rest)
+
+
+def test_cancelled_jobs_never_run_their_work():
+    queue = JobQueue()
+    release = threading.Event()
+    ran = []
+    queue.submit("describe", "blocker.gif", lambda job: release.wait(5))
+    queue.submit("describe", "victim.gif", lambda job: ran.append(1))
+    queue.cancel()
+    release.set()
+    assert queue.wait_idle(5)
+    assert ran == []
+
+
+def test_cancel_can_target_one_kind():
+    queue = JobQueue()
+    release = threading.Event()
+    queue.submit("ocr", "blocker.gif", lambda job: release.wait(5))
+    described = queue.submit("describe", "a.gif", lambda job: "x")
+    ocr_job = queue.submit("ocr", "b.gif", lambda job: "x")
+    assert queue.cancel("describe") == 1
+    release.set()
+    assert queue.wait_idle(5)
+    assert queue.get(described.id).status == "cancelled"
+    assert queue.get(ocr_job.id).status == "done"
