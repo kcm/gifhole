@@ -232,7 +232,34 @@ gifhole --root DIR    library location   (default ~/.gifhole)
        --host ADDR   bind address       (default 127.0.0.1, loopback only)
        --no-open     do not open a browser
        --reload      restart on source changes (development)
+       --token TOKEN require a token on every request (or GIFHOLE_TOKEN)
 ```
+
+## Running it on a server
+
+gifhole binds to loopback and has **no authentication by default**, which is
+right for the machine you are sitting at and wrong the moment it is reachable
+by anything else. There is nothing clever protecting it: any client that can
+open the port can read the library, clear it, and empty the trash permanently.
+The cross-site check only stops a *browser* being used as the weapon.
+
+If you expose it, set a token:
+
+```
+gifhole --host 0.0.0.0 --token "$(openssl rand -hex 24)"
+# or
+GIFHOLE_TOKEN=... docker compose up -d
+```
+
+Then visit `http://host:8777/?token=...` once. The token is remembered in a
+cookie, which is also what lets the GIF images load: an `<img>` tag cannot
+carry an `Authorization` header. Scripts can use `Authorization: Bearer ...`
+instead. Every route is covered, including `/gifs/*`, since those files are
+the data.
+
+The token is a shared secret over plain HTTP, so it is only as private as the
+network. For anything beyond a trusted LAN, put it behind a reverse proxy with
+TLS, or on a private network like Tailscale.
 
 ## Moving the library
 

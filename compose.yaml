@@ -16,8 +16,10 @@ services:
     volumes:
       - ./library:/library
     environment:
-      # Uncomment to enable Claude descriptions. OCR is macOS-only and stays
-      # unavailable in the container either way.
-      # ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       GIFHOLE_ROOT: /library
+      # Uncomment to enable Claude descriptions.
+      # ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # Set this before changing the port binding below to anything other than
+      # 127.0.0.1. Without it, whoever can reach the port can clear the library.
+      # GIFHOLE_TOKEN: ${GIFHOLE_TOKEN}
     restart: unless-stopped

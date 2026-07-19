@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
 from pathlib import Path
 
@@ -15,6 +16,13 @@ from gifhole.jobs import JobQueue
 from gifhole.store import Store, split_tags
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def _bearer(header: str) -> str:
+    scheme, _, value = header.partition(" ")
+    return value.strip() if scheme.lower() == "bearer" else ""
+
+
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 
 
@@ -30,7 +38,17 @@ def display_path(path: Path) -> str:
         return str(path)
 
 
-def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
+COOKIE = "gifhole_token"
+
+
+def configured_token(explicit: str | None = None) -> str:
+    return explicit or os.environ.get("GIFHOLE_TOKEN", "")
+
+
+def create_app(
+    root: Path | None = None, *, auto_ocr: bool = True, token: str | None = None
+) -> FastAPI:
+    token = configured_token(token)
     store = Store(root or default_root())
     store.rescan()
     jobs = JobQueue()
@@ -42,6 +60,49 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
     app = FastAPI(title="gifhole", docs_url=None, redoc_url=None)
     app.state.store = store
     app.state.jobs = jobs
+
+    # Registered after the cross-site check, so it runs before it: an
+    # unauthenticated request should be refused for that reason, not sorted
+    # into CSRF categories first.
+    @app.middleware("http")
+    async def require_token(request, call_next):
+        """Gate everything behind a shared token, when one is configured.
+
+        Off by default, so a loopback install behaves exactly as before. When
+        set, it covers `/gifs/*` as well as the API: those files are the data,
+        and protecting the API while serving the GIFs to anyone would be
+        security theatre.
+
+        Three ways to present it. A `Authorization: Bearer` header for API
+        clients; a cookie, which is what makes `<img src>` work at all, since a
+        tag cannot carry a header; and `?token=` once in the URL bar, which
+        sets that cookie. Without the cookie route the UI could authenticate
+        its fetches and still show a wall of broken images.
+        """
+        if not token:
+            return await call_next(request)
+
+        offered = (
+            _bearer(request.headers.get("authorization", ""))
+            or request.cookies.get(COOKIE, "")
+            or request.query_params.get("token", "")
+        )
+        # compare_digest, not ==, so a wrong guess takes the same time to
+        # reject however much of it was right.
+        if not (offered and secrets.compare_digest(offered, token)):
+            return JSONResponse(
+                {"detail": "a token is required; add ?token=... once, or an Authorization header"},
+                status_code=401,
+            )
+
+        response = await call_next(request)
+        if request.query_params.get("token"):
+            # Remember it, so images and later requests carry it. HttpOnly
+            # keeps it away from any script that manages to run on the page.
+            response.set_cookie(
+                COOKIE, token, httponly=True, samesite="lax", max_age=60 * 60 * 24 * 365
+            )
+        return response
 
     @app.middleware("http")
     async def refuse_cross_site_writes(request, call_next):

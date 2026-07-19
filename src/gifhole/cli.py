@@ -12,6 +12,7 @@ from pathlib import Path
 import uvicorn
 
 from gifhole import store
+from gifhole.app import configured_token as _configured_token
 from gifhole.app import create_app, default_root
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -44,6 +45,12 @@ def main() -> None:
     parser.add_argument(
         "--reload", action="store_true", help="restart when the source changes (development)"
     )
+    parser.add_argument(
+        "--token",
+        default="",
+        help="require this token on every request (or set GIFHOLE_TOKEN). "
+        "Off by default; needed if you expose gifhole beyond loopback",
+    )
     # Optional on purpose: bare `gifhole` still means "serve the library", so
     # the subparser must not be required.
     commands = parser.add_subparsers(dest="command")
@@ -59,9 +66,16 @@ def main() -> None:
     if not args.no_open:
         threading.Timer(0.8, webbrowser.open, (url,)).start()
 
+    if args.token:
+        # The reload path rebuilds the app in a subprocess and cannot be handed
+        # arguments, so the token travels the same way --root does.
+        os.environ["GIFHOLE_TOKEN"] = args.token
+    if _configured_token(args.token):
+        print(f"        access: token required, add ?token=... to {url} once")
+
     common = {"host": args.host, "port": args.port, "log_level": "warning"}
     if not args.reload:
-        uvicorn.run(create_app(args.root), **common)
+        uvicorn.run(create_app(args.root, token=args.token or None), **common)
         return
 
     # The reloader rebuilds the app in a subprocess, so it can only be handed an

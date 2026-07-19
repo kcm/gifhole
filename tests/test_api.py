@@ -1,6 +1,7 @@
 import itertools
 
 import pytest
+from fastapi.testclient import TestClient
 
 from tests.conftest import make_gif, make_textured_gif
 
@@ -436,3 +437,62 @@ def test_cancel_endpoint_reports_what_it_stopped(client, monkeypatch):
 
 def test_cancel_with_nothing_queued_is_harmless(client):
     assert client.post("/api/jobs/cancel", json={}).json() == {"ok": True, "cancelled": 0}
+
+
+# -- optional shared token ---------------------------------------------------
+
+
+@pytest.fixture
+def guarded(tmp_path):
+    """A library that requires a token, as it would be when exposed."""
+    from gifhole.app import create_app
+
+    return TestClient(create_app(tmp_path, auto_ocr=False, token="s3cret"))
+
+
+def test_without_a_token_configured_nothing_changes(client):
+    """The default is a loopback install, which must not grow a login."""
+    assert client.get("/api/gifs").status_code == 200
+
+
+def test_the_gif_files_are_guarded_too(guarded):
+    """Protecting the API while serving the GIFs to anyone would be theatre:
+    the files are the data."""
+    assert guarded.get("/gifs/anything.gif").status_code == 401
+    assert guarded.get("/").status_code == 401
+
+
+def test_destructive_routes_are_refused_without_a_token(guarded):
+    """The demonstration that prompted this: two unauthenticated calls used to
+    clear a library and then permanently empty its trash."""
+    assert guarded.post("/api/gifs/clear", json={"confirm": "clear"}).status_code == 401
+    assert guarded.post("/api/trash/purge", json={"all": True}).status_code == 401
+
+
+def test_a_wrong_token_is_refused(guarded):
+    assert guarded.get("/api/gifs", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert guarded.get("/api/gifs", params={"token": "wrong"}).status_code == 401
+
+
+def test_a_bearer_header_is_accepted(guarded):
+    res = guarded.get("/api/gifs", headers={"Authorization": "Bearer s3cret"})
+    assert res.status_code == 200
+
+
+def test_the_query_parameter_sets_a_cookie_so_images_work(guarded):
+    """An <img> tag cannot carry an Authorization header, so without the cookie
+    the UI would authenticate its fetches and still show broken images."""
+    res = guarded.get("/", params={"token": "s3cret"})
+    assert res.status_code == 200
+    assert res.cookies.get("gifhole_token") == "s3cret"
+    # The client keeps the cookie, so a bare request now succeeds.
+    assert guarded.get("/api/gifs").status_code == 200
+
+
+def test_the_token_can_come_from_the_environment(tmp_path, monkeypatch):
+    from gifhole.app import create_app
+
+    monkeypatch.setenv("GIFHOLE_TOKEN", "from-env")
+    client = TestClient(create_app(tmp_path, auto_ocr=False))
+    assert client.get("/api/gifs").status_code == 401
+    assert client.get("/api/gifs", headers={"Authorization": "Bearer from-env"}).status_code == 200

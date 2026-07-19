@@ -95,6 +95,12 @@ stray request cannot empty it.
   real library under `~/.gifhole`, started a worker thread, and ran Vision OCR
   over the user's actual GIFs whenever anything imported the module, the test
   suite included. Serve with `uvicorn --factory gifhole.app:create_app`.
+- **The token guard covers `/gifs/*` too, and that is not optional.** Those
+  files are the data; protecting the API while serving the GIFs to anyone who
+  asks would be theatre. It also has to be accepted as a cookie, because an
+  `<img>` tag cannot carry an `Authorization` header, so a header-only scheme
+  would leave the UI showing a wall of broken images. Compare with
+  `secrets.compare_digest`, never `==`.
 - **Mutating routes refuse cross-site requests.** There is no auth and several
   routes are CORS-simple (a bodyless POST to `/enrich` spends real API credit),
   so a middleware rejects writes carrying a cross-site `Sec-Fetch-Site` or a
