@@ -520,3 +520,35 @@ def test_frame_sampling_still_skips_the_title_card():
     path = pathlib.Path(tempfile.mkdtemp()) / "short.gif"
     path.write_bytes(make_animated_gif(frames=6))
     assert len(sample_frames(path, 3)) == 3
+
+
+# -- port handling -----------------------------------------------------------
+
+
+def test_a_taken_port_is_detected_before_anything_claims_to_serve():
+    """It used to print "serving:", open a browser and exit 0 after uvicorn had
+    already failed to bind, so a supervisor saw a clean start."""
+    import socket as sock
+
+    from gifhole.cli import next_free_port, port_in_use
+
+    with sock.socket(sock.AF_INET, sock.SOCK_STREAM) as held:
+        held.bind(("127.0.0.1", 0))
+        held.listen(1)
+        taken = held.getsockname()[1]
+        assert port_in_use("127.0.0.1", taken) is True
+        spare = next_free_port("127.0.0.1", taken)
+        assert spare is not None and spare != taken
+        # The suggestion has to actually be usable, or it is worse than none.
+        assert port_in_use("127.0.0.1", spare) is False
+
+
+def test_a_free_port_reads_as_free():
+    import socket as sock
+
+    from gifhole.cli import port_in_use
+
+    with sock.socket(sock.AF_INET, sock.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        free = probe.getsockname()[1]
+    assert port_in_use("127.0.0.1", free) is False

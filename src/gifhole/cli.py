@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import socket
 import sys
 import threading
 import webbrowser
@@ -16,6 +17,32 @@ from gifhole.app import configured_token as _configured_token
 from gifhole.app import create_app, default_root
 
 PACKAGE_DIR = Path(__file__).resolve().parent
+
+# How far to look for a free port when suggesting one.
+PORT_SEARCH = 20
+
+
+def port_in_use(host: str, port: int) -> bool:
+    """Whether something is already listening there.
+
+    Checked before anything is printed or opened. Binding is left to uvicorn;
+    this only decides whether to bother, so the race between the two is
+    harmless: uvicorn still reports its own failure if it loses.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind((host, port))
+        except OSError:
+            return True
+    return False
+
+
+def next_free_port(host: str, start: int) -> int | None:
+    for candidate in range(start + 1, start + 1 + PORT_SEARCH):
+        if not port_in_use(host, candidate):
+            return candidate
+    return None
 
 
 def move(args) -> int:
@@ -60,6 +87,18 @@ def main() -> None:
 
     if args.command == "move":
         raise SystemExit(move(args))
+
+    # Before anything claims to be serving. This used to print "serving:" and
+    # open a browser after uvicorn had already failed to bind, and exit 0, so a
+    # supervisor saw a clean start and the user saw a dead tab.
+    if port_in_use(args.host, args.port):
+        print(f"gifhole: {args.host}:{args.port} is already in use", file=sys.stderr)
+        spare = next_free_port(args.host, args.port)
+        if spare:
+            print(f"         try: gifhole --port {spare}", file=sys.stderr)
+        else:
+            print("         nothing free nearby; pick a port with --port", file=sys.stderr)
+        raise SystemExit(1)
 
     url = f"http://{args.host}:{args.port}/"
     print(f"gifhole  library: {args.root / 'gifs'}\n        serving: {url}")

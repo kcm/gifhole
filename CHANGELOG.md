@@ -24,6 +24,10 @@ losing anything. Anything that would break that is a major change.
 
 ### Fixed
 
+- A port that is already in use is detected before anything is printed or
+  opened. It used to report "serving:" and open a browser after the bind had
+  already failed, and exit 0, so a supervisor saw a clean start. It now names
+  the conflict, suggests a free port, and exits non-zero.
 - Frame sampling now reaches the end of an animation. The spacing put the last
   sample at `count/(count+1)` of the way through, so with the default of three
   the final quarter was never examined and a caption appearing only at the end

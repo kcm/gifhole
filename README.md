@@ -275,6 +275,9 @@ gifhole --root DIR    library location   (default ~/.gifhole)
        --token TOKEN require a token on every request (or GIFHOLE_TOKEN)
 ```
 
+If the port is already taken, gifhole says so, suggests a free one, and exits
+non-zero rather than printing a URL that does not work.
+
 ## Running it on a server
 
 gifhole binds to loopback and has **no authentication by default**, which is

@@ -178,6 +178,28 @@ docker run --rm -v "$PWD":/src:ro python:3.13-slim sh -c \
    pip install -q uv && uv sync -q && uv run pytest -q'
 ```
 
+## Where the storage actually runs out
+
+SQLite is not the limit and will not be for a long time. `list_gifs()` is,
+because it materialises every row and filters in Python, so a search costs the
+same as listing everything. Measured on an M-series Mac, metadata only:
+
+| rows | list all | search |
+| --- | --- | --- |
+| 1,000 | 5 ms | 5 ms |
+| 10,000 | 50 ms | 54 ms |
+| 50,000 | 263 ms | 290 ms |
+| 200,000 | 1.16 s | 1.27 s |
+
+So it is imperceptible to about 10k GIFs, tolerable to 50k, and too slow to
+type into at 200k. A personal library reaching 10k would be remarkable.
+
+If it ever needs to go further, the answer is not a search server. Push the
+filter into SQL, or use SQLite's built-in FTS5: still one file, still no new
+dependency, and worth perhaps a 10x before anything more exotic is warranted.
+Do not pre-emptively optimise this; measure first, and keep the whole library
+in one place, which is the property that makes the simple thing keep working.
+
 ## Gotchas
 
 - **`[hidden]` needs the `!important` reset in `style.css`.** Author `display`
