@@ -30,10 +30,15 @@ MAX_TAGS = 6
 
 
 def build_schema(vocabulary: list[str], max_new: int = MAX_NEW_TAGS) -> dict:
+    # No `maxItems` anywhere below: structured output rejects it outright
+    # ("For 'array' type, property 'maxItems' is not supported"), so the counts
+    # are asked for in the descriptions and enforced in merge_result(). The
+    # enum is the constraint that actually matters and that one is honoured.
     known: dict = {
         "type": "array",
-        "maxItems": MAX_TAGS,
-        "description": "Tags for this GIF, chosen from the library's existing vocabulary.",
+        "description": (
+            f"At most {MAX_TAGS} tags for this GIF, chosen from the library's existing vocabulary."
+        ),
     }
     # An empty enum is not valid JSON Schema, so a library with no tags yet gets
     # the unconstrained shape and builds its vocabulary from the new-tag budget.
@@ -58,11 +63,11 @@ def build_schema(vocabulary: list[str], max_new: int = MAX_NEW_TAGS) -> dict:
             "new_tags": {
                 "type": "array",
                 "items": {"type": "string"},
-                "maxItems": max_new,
                 "description": (
-                    "Lowercase single-word tags that are NOT in the existing "
-                    "vocabulary. Leave empty unless an existing tag genuinely "
-                    "does not fit; a smaller vocabulary is more useful."
+                    f"At most {max_new} lowercase single-word tags that are NOT "
+                    "in the existing vocabulary. Leave empty unless an existing "
+                    "tag genuinely does not fit; a smaller vocabulary is more "
+                    "useful than a complete one."
                 ),
             },
         },
@@ -96,16 +101,28 @@ class EnrichError(Exception):
 
 
 def available() -> tuple[bool, str]:
-    """Report whether enrichment can run, and why not when it cannot."""
+    """Report whether enrichment can actually run, and why not when it cannot.
+
+    This asks the SDK rather than checking env vars itself. Constructing a
+    client resolves every credential source it supports, including an
+    `ant auth login` profile, and costs no network call. Reading the env alone
+    would wrongly disable the feature for profile users; reporting "available"
+    on the strength of the package being installed (which is what this used to
+    do) is worse, because the button then looks live and every call fails.
+    """
     try:
-        import anthropic  # noqa: F401
+        import anthropic
     except ImportError:
         return False, "the anthropic package is not installed (pip install 'gifhole[enrich]')"
-    import os
 
-    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
-        # An `ant auth login` profile also works, so this is a hint, not a verdict.
-        log.debug("no API key in env; relying on an ant auth profile if present")
+    try:
+        client = anthropic.Anthropic()
+    except Exception as exc:  # noqa: BLE001 - any construction failure means unusable
+        log.debug("anthropic client would not construct: %s", exc)
+        return False, "no API key. Set ANTHROPIC_API_KEY or run `ant auth login`"
+
+    if not (client.api_key or client.auth_token or getattr(client, "credentials", None)):
+        return False, "no API key. Set ANTHROPIC_API_KEY or run `ant auth login`"
     return True, ""
 
 
@@ -186,11 +203,13 @@ def merge_result(data: dict, vocabulary: list[str]) -> dict:
     # meme_name is null rather than "" whenever the model has nothing, so it is
     # normalised here instead of assuming a string comes back.
     meme = (data.get("meme_name") or "").strip()
-    for tag in data.get("known_tags") or []:
+    for tag in (data.get("known_tags") or [])[:MAX_TAGS]:
         push(tag)
-    for tag in data.get("new_tags") or []:
-        if tag.strip().lower() not in known:
-            push(tag)
+    # Truncated here rather than in the schema: structured output does not
+    # support maxItems, so an over-eager answer has to be trimmed on arrival.
+    fresh = [t for t in (data.get("new_tags") or []) if t.strip().lower() not in known]
+    for tag in fresh[:MAX_NEW_TAGS]:
+        push(tag)
     description = (data.get("description") or "").strip()
     # The meme's name used to be split into tags, which made it searchable at
     # the cost of shedding junk into the vocabulary ("distracted", "boyfriend").

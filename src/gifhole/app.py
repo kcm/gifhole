@@ -111,16 +111,51 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
         )
 
     @app.post("/api/gifs")
-    async def upload(file: UploadFile, tags: str = Form("")) -> JSONResponse:
+    async def upload(file: UploadFile, tags: str = Form(""), force: str = Form("")) -> JSONResponse:
         data = await file.read()
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "file too large")
+        name = file.filename or "gif.gif"
+
+        # Duplicates are reported, not rejected. Only the user knows whether a
+        # near match is the same GIF or a different cut of the same scene, so
+        # this answers 200-with-duplicates and waits to be told again.
+        if not force:
+            matches = _duplicates_of(data, name)
+            if matches:
+                return JSONResponse({"duplicate": True, "filename": name, "matches": matches})
+
         try:
-            gif = store.add_bytes(file.filename or "gif.gif", data, tags=tags)
+            gif = store.add_bytes(name, data, tags=tags)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         queue_ocr(gif.id, gif.filename)
         return JSONResponse(gif.as_dict(), status_code=201)
+
+    def _duplicates_of(data: bytes, name: str) -> list[dict]:
+        """Compare against the library without leaving the candidate on disk.
+
+        The perceptual hash needs a real file to read frames from, so the bytes
+        are staged and removed again; adding first and rolling back would be
+        worse, since a crash would leave the duplicate in the library.
+        """
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        probe = staging_dir / f"probe-{abs(hash(name))}.gif"
+        try:
+            probe.write_bytes(data)
+            found = store.find_duplicates(data, probe)
+        except OSError:
+            found = store.find_duplicates(data)
+        finally:
+            probe.unlink(missing_ok=True)
+        return [{**gif.as_dict(), "match": kind} for gif, kind in found]
+
+    @app.get("/api/duplicates")
+    def list_duplicates() -> JSONResponse:
+        """Duplicates already in the library, for a collection built before this."""
+        store.backfill_hashes()
+        groups = store.duplicate_groups()
+        return JSONResponse({"groups": [[g.as_dict() for g in group] for group in groups]})
 
     @app.patch("/api/gifs/{gif_id}")
     async def edit(gif_id: int, payload: dict) -> JSONResponse:

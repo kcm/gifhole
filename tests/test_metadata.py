@@ -176,14 +176,39 @@ def test_failed_ocr_is_recorded_as_a_failure_not_as_empty_text(tmp_path, monkeyp
 
 # -- constrained tagging -----------------------------------------------------
 
-from gifhole.enrich import MAX_NEW_TAGS, build_schema, merge_result  # noqa: E402
+import json  # noqa: E402
+
+from gifhole.enrich import (  # noqa: E402
+    MAX_NEW_TAGS,
+    build_schema,
+    merge_result,
+)
 
 
 def test_schema_pins_tags_to_the_existing_vocabulary():
     """The whole point: the model cannot return an off-vocabulary known_tag."""
     schema = build_schema(["reaction", "cat", "meme"])
     assert schema["properties"]["known_tags"]["items"]["enum"] == ["cat", "meme", "reaction"]
-    assert schema["properties"]["new_tags"]["maxItems"] == MAX_NEW_TAGS
+
+
+def test_schema_uses_no_maxitems_anywhere():
+    """Structured output rejects maxItems outright, so the caps live in
+    merge_result() instead. A 400 here would break describing entirely."""
+    schema = build_schema(["a", "b"])
+    assert "maxItems" not in json.dumps(schema)
+
+
+def test_merge_caps_the_number_of_new_tags():
+    out = merge_result(
+        {
+            "description": "d",
+            "meme_name": "",
+            "known_tags": [],
+            "new_tags": [f"new{i}" for i in range(6)],
+        },
+        [],
+    )
+    assert len(out["tags"]) == MAX_NEW_TAGS
 
 
 def test_schema_without_a_vocabulary_has_no_empty_enum():

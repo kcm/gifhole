@@ -164,6 +164,28 @@ stray request cannot empty it.
   every card, throwing away scroll position and focus mid-file. Tag-bar counts
   are instead adjusted locally by `bumpTag()`, which a later `load()`
   reconciles against the server's authoritative numbers.
+- **Structured output rejects `maxItems`.** The API returns a 400
+  ("For 'array' type, property 'maxItems' is not supported"), so tag counts are
+  requested in the field descriptions and enforced in `merge_result()`. Only
+  `enum` is honoured, and that is the constraint that matters. This was found by
+  calling the real API; the schema looked perfectly valid until then.
+- **`enrich.available()` must answer honestly.** It constructs a client and
+  checks whether any credential resolved (`api_key`/`auth_token`/`credentials`),
+  which covers `ant auth login` without a network call. Reporting "available"
+  just because the package imports (what it used to do) leaves a live-looking
+  button whose every call fails.
+- **Deduping deliberately avoids `imagededup`.** That package pulls torch,
+  torchvision, scikit-learn, scipy and matplotlib for CNN methods this project
+  would never use; `dedupe.py` implements the same published dhash in ~40 lines
+  on Pillow. Two properties are load-bearing and both were found empirically:
+  a flat image (solid colour, title card) dhashes to zero and matches every
+  other flat image, so `MIN_CONTRAST` withholds a hash entirely; and a
+  high-frequency pattern aliases under downsampling, so test fixtures must use
+  large smooth shapes (`make_textured_gif`) or a resized copy stops matching.
+  `NEAR_DISTANCE` is measured, not guessed: see the comment for the numbers.
+- **A duplicate is reported, never rejected.** `/api/gifs` answers 200 with
+  `{duplicate, matches}` and writes nothing; only `force` adds. Keep that shape:
+  only the user can tell a re-encode from a different cut of the same scene.
 - **Auto-tagging is only useful if the vocabulary stays small.** `build_schema()`
   pins `known_tags` to an `enum` of the library's existing tags, so structured
   output makes an off-vocabulary tag impossible rather than merely discouraged;

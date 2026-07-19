@@ -630,19 +630,115 @@ function patch(id, body) {
 
 // ---------------------------------------------------------------- uploading
 
+// Files the server recognised as duplicates, held back for a decision. Kept as
+// the original File objects so "add anyway" can re-post the exact bytes rather
+// than asking the user to find the file again.
+let pendingDupes = [];
+
+async function postFile(file, force = false) {
+  const body = new FormData();
+  body.append("file", file);
+  if (force) body.append("force", "1");
+  const res = await fetch("/api/gifs", { method: "POST", body });
+  return res.ok ? res.json() : null;
+}
+
 async function upload(files) {
   const gifs = [...files].filter((f) => f.type === "image/gif" || f.name.endsWith(".gif"));
   if (!gifs.length) return toast("no GIFs in that drop");
   let ok = 0;
+  const dupes = [];
   for (const file of gifs) {
-    const body = new FormData();
-    body.append("file", file);
-    const res = await fetch("/api/gifs", { method: "POST", body });
-    if (res.ok) ok += 1;
+    const out = await postFile(file);
+    if (!out) continue;
+    // A duplicate answers 200 with matches instead of creating anything, so
+    // nothing lands until the user says so.
+    if (out.duplicate) dupes.push({ file, matches: out.matches });
+    else ok += 1;
   }
-  toast(`added ${ok} of ${gifs.length}`);
+  if (ok) toast(`added ${ok} of ${gifs.length}`);
   load();
+  if (dupes.length) showDupes(dupes);
+  else if (!ok) toast("nothing added");
 }
+
+// ---------------------------------------------------------------- duplicates
+
+const dupePanel = $("#dupes");
+const closeDupes = () => {
+  dupePanel.hidden = true;
+  pendingDupes = [];
+};
+
+function showDupes(items) {
+  pendingDupes = items;
+  $("#dupecount").textContent =
+    items.length === 1 ? "1 looks familiar" : `${items.length} look familiar`;
+
+  $("#dupelist").replaceChildren(
+    ...items.map(({ file, matches }, i) => {
+      const row = document.createElement("div");
+      row.className = "duperow";
+      row.dataset.index = String(i);
+
+      const incoming = document.createElement("figure");
+      incoming.className = "dupefig";
+      const img = document.createElement("img");
+      // The candidate is not on the server, so preview it from the local file.
+      img.src = URL.createObjectURL(file);
+      img.addEventListener("load", () => URL.revokeObjectURL(img.src), { once: true });
+      const caption = document.createElement("figcaption");
+      caption.textContent = file.name;
+      incoming.append(img, caption);
+
+      const versus = document.createElement("div");
+      versus.className = "dupematches";
+      for (const match of matches) {
+        const fig = document.createElement("figure");
+        fig.className = "dupefig";
+        const mi = document.createElement("img");
+        mi.src = match.url;
+        const mc = document.createElement("figcaption");
+        mc.textContent = `${match.match} · ${match.filename}`;
+        fig.append(mi, mc);
+        versus.append(fig);
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "dupeactions";
+      const add = document.createElement("button");
+      add.textContent = "Add anyway";
+      add.addEventListener("click", async () => {
+        add.disabled = true;
+        await postFile(file, true);
+        row.remove();
+        toast(`added ${file.name}`);
+        load();
+        if (!$("#dupelist").children.length) closeDupes();
+      });
+      const skip = document.createElement("button");
+      skip.textContent = "Skip";
+      skip.addEventListener("click", () => {
+        row.remove();
+        if (!$("#dupelist").children.length) closeDupes();
+      });
+      actions.append(add, skip);
+
+      row.append(incoming, versus, actions);
+      return row;
+    }),
+  );
+  dupePanel.hidden = false;
+}
+
+$("#dupeskipall").addEventListener("click", closeDupes);
+$("#dupeaddall").addEventListener("click", async () => {
+  const items = [...pendingDupes];
+  closeDupes();
+  for (const { file } of items) await postFile(file, true);
+  toast(`added ${items.length} anyway`);
+  load();
+});
 
 // dragenter/dragleave pairs are easy to lose (a drag that ends outside the
 // window never fires leave), so the overlay is purely decorative: it ignores
@@ -1273,6 +1369,7 @@ addEventListener("keydown", (e) => {
   // leaving a suggestion list doesn't also wipe the search you were refining.
   if (e.key === "Escape") {
     if (!help.hidden) return closeHelp();
+    if (!dupePanel.hidden) return closeDupes();
     if (!trashPanel.hidden) return closeTrash();
     if (!picker.hidden) return closePicker();
     if (typing) return; // fields handle their own Escape

@@ -14,6 +14,8 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
+from gifhole import dedupe
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS gifs (
     id        INTEGER PRIMARY KEY,
@@ -36,6 +38,9 @@ MIGRATIONS = {
     "source_url": "TEXT NOT NULL DEFAULT ''",
     "ocr_at": "REAL NOT NULL DEFAULT 0",
     "enriched_at": "REAL NOT NULL DEFAULT 0",
+    # Duplicate detection: exact bytes, and one perceptual hash of a frame.
+    "sha256": "TEXT NOT NULL DEFAULT ''",
+    "phash": "TEXT NOT NULL DEFAULT ''",
 }
 
 
@@ -61,6 +66,8 @@ class Gif:
     source_url: str = ""
     ocr_at: float = 0.0
     enriched_at: float = 0.0
+    sha256: str = ""
+    phash: str = ""
 
     def as_dict(self) -> dict:
         return {**self.__dict__, "url": f"/gifs/{self.filename}"}
@@ -124,6 +131,8 @@ class Store:
             source_url=row["source_url"],
             ocr_at=row["ocr_at"],
             enriched_at=row["enriched_at"],
+            sha256=row["sha256"],
+            phash=row["phash"],
         )
 
     def list_gifs(self, query: str = "", sort: str = "added") -> list[Gif]:
@@ -181,13 +190,17 @@ class Store:
         else:
             width, height = gif_dimensions(data)
             size = len(data)
+        sha = dedupe.content_hash(data if data is not None else path.read_bytes())
+        phash = dedupe.perceptual_hash(path)
         cur = self.db.execute(
             """INSERT INTO gifs
-                   (filename, title, tags, width, height, bytes, added_at, source_url)
-               VALUES (?, '', ?, ?, ?, ?, ?, ?)
+                   (filename, title, tags, width, height, bytes, added_at, source_url,
+                    sha256, phash)
+               VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(filename) DO UPDATE SET width=excluded.width,
-                   height=excluded.height, bytes=excluded.bytes""",
-            (path.name, tags, width, height, size, time.time(), source_url),
+                   height=excluded.height, bytes=excluded.bytes,
+                   sha256=excluded.sha256, phash=excluded.phash""",
+            (path.name, tags, width, height, size, time.time(), source_url, sha, phash),
         )
         self.db.commit()
         gif_id = (
@@ -230,6 +243,72 @@ class Store:
             (description.strip(), " ".join(merged), time.time(), gif_id),
         )
         self.db.commit()
+
+    def find_duplicates(self, data: bytes, path: Path | None = None) -> list[tuple[Gif, str]]:
+        """What already in the library looks like this GIF.
+
+        Returns (gif, "exact" | "near"), exact first. Nothing is decided here:
+        the caller shows these to the user, because only they can say whether a
+        near match is the same GIF or a different cut of the same scene.
+        """
+        sha = dedupe.content_hash(data)
+        phash = dedupe.perceptual_hash(path) if path else ""
+        exact, near = [], []
+        for gif in self.list_gifs():
+            if gif.sha256 and gif.sha256 == sha:
+                exact.append((gif, "exact"))
+            elif phash and dedupe.is_near(gif.phash, phash):
+                near.append((gif, "near"))
+        return exact + near
+
+    def backfill_hashes(self, limit: int | None = None) -> int:
+        """Hash rows added before deduping existed, so they can be matched too.
+
+        Without this a library built up over months would only ever detect
+        duplicates of things added after the upgrade.
+        """
+        rows = self.db.execute(
+            "SELECT id, filename FROM gifs WHERE sha256 = '' OR phash = ''"
+        ).fetchall()
+        done = 0
+        for row in rows[:limit] if limit else rows:
+            path = self.gifs_dir / row["filename"]
+            if not path.is_file():
+                continue
+            try:
+                sha = dedupe.content_hash(path.read_bytes())
+            except OSError:
+                continue
+            self.db.execute(
+                "UPDATE gifs SET sha256 = ?, phash = ? WHERE id = ?",
+                (sha, dedupe.perceptual_hash(path), row["id"]),
+            )
+            done += 1
+        self.db.commit()
+        return done
+
+    def duplicate_groups(self) -> list[list[Gif]]:
+        """Duplicates already sitting in the library, grouped."""
+        gifs = [g for g in self.list_gifs() if g.sha256 or g.phash]
+        seen: set[int] = set()
+        groups = []
+        for i, gif in enumerate(gifs):
+            if gif.id in seen:
+                continue
+            group = [gif]
+            for other in gifs[i + 1 :]:
+                if other.id in seen:
+                    continue
+                same = (gif.sha256 and gif.sha256 == other.sha256) or dedupe.is_near(
+                    gif.phash, other.phash
+                )
+                if same:
+                    group.append(other)
+                    seen.add(other.id)
+            if len(group) > 1:
+                seen.add(gif.id)
+                groups.append(group)
+        return groups
 
     def retag(
         self, ids: list[int], add: list[str] | tuple[str, ...] = (), remove: list[str] = ()

@@ -27,6 +27,34 @@ it somewhere else with `--root ~/Pictures/gifs`.
 Dropping files into the `gifs/` folder by hand works too; press *Rescan* to
 pick them up.
 
+## Duplicates
+
+Adding a GIF you already have opens a review panel showing the incoming file
+beside what it matched, with *Add anyway* or *Skip* per file. Nothing is
+written until you say so, and nothing is ever rejected outright.
+
+Two checks run. **Exact** matches compare a SHA-256 of the file, which catches
+re-scraping a page or re-downloading a link. **Near** matches compare a
+perceptual hash of one frame, which catches the same GIF re-encoded, resized,
+or re-hosted, where the bytes differ but the picture does not.
+
+The threshold was measured rather than guessed: across 30 resized pairs and 90
+unrelated pairs, the same picture at a different size scored at most 13 and
+different pictures never below 19, so the cutoff sits at 12. It leans towards
+flagging, because a false positive costs one click and a miss puts a duplicate
+in your library permanently. A GIF with no structure at all (a solid colour, a
+plain title card) gets no perceptual hash, since every flat image hashes alike
+and they would otherwise all match each other.
+
+`GET /api/duplicates` reports copies already sitting in the library, and
+backfills hashes for anything added before this existed.
+
+Not using the `imagededup` package, despite it being the obvious reference:
+installing it pulls in torch, torchvision, scikit-learn, scipy and matplotlib,
+several gigabytes, almost all of it for CNN methods gifhole would not use.
+`dedupe.py` implements the same published hash in about forty lines with
+Pillow alone.
+
 ## Keyboard
 
 Everything is reachable without the mouse. `?` shows this list in the app.

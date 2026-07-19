@@ -81,3 +81,35 @@ def store(tmp_path) -> Store:
 def client(tmp_path) -> TestClient:
     # OCR off: the suite must not depend on macOS Vision being present.
     return TestClient(create_app(tmp_path, auto_ocr=False))
+
+
+def make_textured_gif(seed: int = 0, width: int = 160, height: int = 120) -> bytes:
+    """A GIF with real structure, for perceptual-hash tests.
+
+    Two properties matter and both bit during development. A flat image has no
+    adjacent-pixel differences, so its dhash is zero and matches every other
+    flat image. And a fine, high-frequency pattern aliases under downsampling,
+    so a resized copy stops matching, which real GIF frames do not do. Hence
+    large smooth shapes, positioned as fractions of the canvas.
+    """
+    import io
+    import random
+
+    from PIL import Image, ImageDraw
+
+    rnd = random.Random(seed)
+    img = Image.new("RGB", (width, height))
+    draw = ImageDraw.Draw(img)
+    for y in range(height):
+        draw.line([(0, y), (width, y)], fill=(30 + y * 120 // height, 60, 200 - y * 90 // height))
+    for _ in range(3):
+        x0, y0 = rnd.uniform(0, 0.5), rnd.uniform(0, 0.5)
+        x1, y1 = x0 + rnd.uniform(0.25, 0.45), y0 + rnd.uniform(0.25, 0.45)
+        shape = draw.ellipse if rnd.random() < 0.5 else draw.rectangle
+        shape(
+            [x0 * width, y0 * height, x1 * width, y1 * height],
+            fill=(rnd.randrange(256), rnd.randrange(256), rnd.randrange(256)),
+        )
+    buf = io.BytesIO()
+    img.save(buf, format="GIF")
+    return buf.getvalue()

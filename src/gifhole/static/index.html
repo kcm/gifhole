@@ -106,6 +106,23 @@
   <button id="bulkclear">Deselect</button>
 </div>
 
+<div id="dupes" class="trash" hidden>
+  <div class="trashbox">
+    <div class="trashhead">
+      <h2>already have these?</h2>
+      <span id="dupecount" class="trashsummary"></span>
+      <span class="picker-spacer"></span>
+      <button id="dupeaddall">Add all anyway</button>
+      <button id="dupeskipall" class="primary">Skip all</button>
+    </div>
+    <div id="dupelist" class="dupelist"></div>
+    <p class="trashfoot">
+      Exact matches are the same file. Near matches look like the same GIF at a
+      different size or quality; check them, they can be different cuts.
+    </p>
+  </div>
+</div>
+
 <div id="trash" class="trash" hidden>
   <div class="trashbox">
     <div class="trashhead">

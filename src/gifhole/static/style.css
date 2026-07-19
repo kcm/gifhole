@@ -1139,3 +1139,65 @@ footer select {
   --btn-radius: 18px;
   --fig-bg: #f3f3f3;
 }
+
+/* -- duplicate review ------------------------------------------------------ */
+
+.dupelist {
+  overflow-y: auto;
+  min-height: 0;
+  margin-top: 12px;
+}
+
+.duperow {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 12px 0;
+  border-top: 1px solid var(--rule);
+  flex-wrap: wrap;
+}
+
+/* The incoming file and its matches sit side by side deliberately: a near
+   match can be a different cut of the same scene, and only seeing both
+   answers that. */
+.dupematches {
+  display: flex;
+  gap: 10px;
+  flex: 1;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.dupefig {
+  margin: 0;
+  width: 116px;
+  font-size: 11px;
+  color: var(--panel-muted);
+}
+
+.dupefig img {
+  width: 116px;
+  height: 88px;
+  object-fit: contain;
+  background: var(--fig-bg);
+  border: 1px solid var(--rule);
+  display: block;
+}
+
+.dupefig figcaption {
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dupeactions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: none;
+}
+
+.dupeactions button {
+  white-space: nowrap;
+}

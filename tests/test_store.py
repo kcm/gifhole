@@ -1,7 +1,7 @@
 import pytest
 
 from gifhole.store import gif_dimensions, safe_filename, split_tags
-from tests.conftest import make_gif
+from tests.conftest import make_gif, make_textured_gif
 
 
 def test_dimensions_read_from_header():
@@ -155,3 +155,69 @@ def test_rescan_picks_up_uppercase_extensions(store):
     (store.gifs_dir / "SHOUTY.GIF").write_bytes(make_gif())
     assert store.rescan()["added"] == 1
     assert [g.filename for g in store.list_gifs()] == ["SHOUTY.GIF"]
+
+
+# -- duplicate detection -----------------------------------------------------
+
+
+def test_identical_bytes_are_an_exact_duplicate(store):
+    data = make_textured_gif(1)
+    store.add_bytes("first.gif", data)
+    matches = store.find_duplicates(data)
+    assert [kind for _, kind in matches] == ["exact"]
+    assert matches[0][0].filename == "first.gif"
+
+
+def test_a_visibly_different_gif_is_not_a_duplicate(store):
+    store.add_bytes("first.gif", make_textured_gif(1))
+    assert store.find_duplicates(make_textured_gif(2)) == []
+
+
+def test_a_resized_copy_is_caught_as_a_near_duplicate(store):
+    """The case sha256 cannot catch: same picture, different bytes."""
+    store.add_bytes("original.gif", make_textured_gif(3, 64, 48))
+    matches = store.find_duplicates(*_staged(make_textured_gif(3, 32, 24)))
+    assert [kind for _, kind in matches] == ["near"]
+
+
+def test_a_flat_image_gets_no_perceptual_hash(store):
+    """Every solid-colour GIF dhashes alike, so they must not match on it."""
+    gif = store.add_bytes("flat.gif", make_gif(32, 24))
+    assert store.get(gif.id).phash == ""
+    # A second, unrelated flat GIF must not be called a duplicate of the first.
+    assert store.find_duplicates(make_gif(16, 16)) == []
+
+
+def test_hashes_are_recorded_on_add(store):
+    gif = store.add_bytes("hashed.gif", make_textured_gif(4))
+    stored = store.get(gif.id)
+    assert len(stored.sha256) == 64
+    assert stored.phash
+
+
+def test_backfill_hashes_covers_rows_added_before_deduping(store):
+    gif = store.add_bytes("old.gif", make_textured_gif(7))
+    store.db.execute("UPDATE gifs SET sha256 = '', phash = '' WHERE id = ?", (gif.id,))
+    store.db.commit()
+    assert store.backfill_hashes() == 1
+    assert store.get(gif.id).sha256
+
+
+def test_duplicate_groups_finds_copies_already_in_the_library(store):
+    data = make_textured_gif(5)
+    store.add_bytes("one.gif", data)
+    store.add_bytes("two.gif", data)
+    store.add_bytes("unrelated.gif", make_textured_gif(6))
+    groups = store.duplicate_groups()
+    assert len(groups) == 1
+    assert sorted(g.filename for g in groups[0]) == ["one.gif", "two.gif"]
+
+
+def _staged(data: bytes):
+    """Write bytes somewhere readable, since a perceptual hash needs a file."""
+    import tempfile
+    from pathlib import Path
+
+    path = Path(tempfile.mkdtemp()) / "probe.gif"
+    path.write_bytes(data)
+    return data, path
