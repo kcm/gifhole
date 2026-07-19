@@ -1408,14 +1408,40 @@ async function openLibrary() {
 // origin, so a fetch here would be cross-origin and would be refused by the
 // same middleware that stops a random site driving your library. Opening a URL
 // is a plain top-level GET and sidesteps all of it.
+// Collects media from the rendered page as well as sending the page address.
+// Both, not either: a page that renders its media in JavaScript (Imgur) has
+// nothing in its HTML for the server to scrape, while Reddit is better scraped
+// server-side, where old.reddit.com exposes every comment rather than only the
+// ones currently rendered. The union covers both, and gifhole dedupes.
+//
+// Findings travel in the URL fragment, which is never sent to the server: no
+// request-line length limit, and no list of URLs in the access log.
 function bookmarkletSource() {
-  const target = `${location.origin}/?add=`;
-  return (
-    "javascript:(function(){window.open(" +
-    JSON.stringify(target) +
-    "+encodeURIComponent(location.href),'_blank');})()"
-  );
+  const target = `${location.origin}/#add=`;
+  const script = `(function(){
+    var seen={},out=[];
+    var keep=function(raw){
+      if(!raw||out.length>=${BOOKMARKLET_MAX})return;
+      var u;try{u=new URL(raw,location.href).href}catch(e){return}
+      u=u.replace(/\\.gifv(\\?|$)/i,'.mp4$1');
+      if(!/\\.(gif|mp4|webm)(\\?|$)/i.test(u)||seen[u])return;
+      seen[u]=1;out.push(u);
+    };
+    var all=document.querySelectorAll('img,source,video,a');
+    for(var i=0;i<all.length;i++){var e=all[i];
+      keep(e.currentSrc);keep(e.getAttribute('src'));
+      keep(e.getAttribute('data-src'));keep(e.getAttribute('href'));keep(e.poster);
+    }
+    window.open(${JSON.stringify(target)}+encodeURIComponent(
+      JSON.stringify({page:location.href,urls:out})),'_blank');
+  })()`;
+  return "javascript:" + script.replace(/\s*\n\s*/g, "");
 }
+
+// Enough for a long thread, and short of the point where a fragment gets
+// unwieldy. Reported rather than silently truncated, per the same rule that
+// governs scraping a page.
+const BOOKMARKLET_MAX = 300;
 
 const bookmarklet = $("#bookmarklet");
 // href as a property, never interpolated into markup.
@@ -1826,8 +1852,8 @@ addEventListener("keydown", (e) => {
 
 help.addEventListener("click", closeHelp);
 
-// Arriving from the bookmarklet: ?add=<page url>. Handled as a normal grab, so
-// a page opens the selection screen and a direct link imports straight away.
+// Arriving from the bookmarklet. Two shapes, because an older bookmark saved
+// before this existed still sends ?add=<page url> and should keep working.
 function handleAddParam() {
   const params = new URLSearchParams(location.search);
   const url = params.get("add");
@@ -1841,6 +1867,63 @@ function handleAddParam() {
   else toast("that bookmark did not carry a usable link");
 }
 
+const looksLikeVideo = (url) => /\.(mp4|webm)(\?|$)/i.test(url);
+
+// The current bookmarklet: everything it found in the page, plus the page
+// itself, in the fragment.
+async function handleAddFragment() {
+  if (!location.hash.startsWith("#add=")) return;
+  let payload;
+  try {
+    payload = JSON.parse(decodeURIComponent(location.hash.slice(5)));
+  } catch {
+    return toast("that bookmark sent something unreadable");
+  }
+  history.replaceState(null, "", location.pathname + location.search);
+
+  toast("looking…");
+  const candidates = [];
+  const seen = new Set();
+
+  // The server first, so its platform-specific handling wins: it reaches
+  // Reddit comments the rendered page has not loaded.
+  if (typeof payload.page === "string" && /^https?:\/\//i.test(payload.page)) {
+    try {
+      const res = await fetch("/api/fetch/discover", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: payload.page }),
+      });
+      if (res.ok) {
+        for (const c of (await res.json()).candidates || []) {
+          if (!seen.has(c.url)) {
+            seen.add(c.url);
+            candidates.push(c);
+          }
+        }
+      }
+    } catch {
+      // A page the server cannot read is the normal case here, not an error:
+      // it is exactly why the bookmarklet also looks at the DOM.
+    }
+  }
+
+  for (const url of payload.urls || []) {
+    if (typeof url === "string" && /^https?:\/\//i.test(url) && !seen.has(url)) {
+      seen.add(url);
+      candidates.push({ url, kind: looksLikeVideo(url) ? "video" : "gif", title: "" });
+    }
+  }
+
+  if (!candidates.length) return toast("nothing to import from that page");
+  if (candidates.length === 1) return importUrls(candidates);
+  openPicker(candidates);
+}
+
 load();
 pollJobs();
 handleAddParam();
+handleAddFragment();
+// Changing only the fragment does not reload the document, so a bookmarklet
+// press landing on an already-open gifhole would otherwise do nothing at all.
+addEventListener("hashchange", handleAddFragment);

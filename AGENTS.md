@@ -95,6 +95,17 @@ stray request cannot empty it.
   real library under `~/.gifhole`, started a worker thread, and ran Vision OCR
   over the user's actual GIFs whenever anything imported the module, the test
   suite included. Serve with `uvicorn --factory gifhole.app:create_app`.
+- **The bookmarklet sends findings AND the page, and gifhole merges them.**
+  Neither source is sufficient alone: a JavaScript-rendered gallery has nothing
+  in its HTML for the server, while `old.reddit.com` exposes comments the
+  rendered page has not loaded. Server candidates are added first so their
+  platform handling wins on collisions.
+- **Fragment, not query string.** The findings list can be long and is nobody
+  else's business; a fragment is never sent to the server, so there is no
+  request-line limit and no URL list in the access log. It also means a
+  `hashchange` listener is required: changing only the fragment does not reload
+  the document, so a bookmarklet press landing on an already-open gifhole would
+  silently do nothing.
 - **The bookmarklet navigates, it does not fetch.** It runs in the visited
   page's origin, so any request it made would be cross-origin and refused by
   `refuse_cross_site_writes`, correctly. Opening `/?add=<url>` is a plain GET

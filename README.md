@@ -48,10 +48,22 @@ plain page load and needs no exception. The bookmark is built from whatever
 address you are using, so it works on a different port or a server, and if a
 token is set it relies on the cookie from your last visit.
 
-It only sends the page's address, so it inherits whatever the server-side
-scraper can do: Giphy, Tenor and Reddit yes, Imgur no. A version that scanned
-the rendered page instead would fix Imgur, at the cost of a much longer
-bookmarklet.
+It sends **both** what it can see in the rendered page and the page's address,
+and gifhole merges the two. That combination is what makes it the most capable
+way in:
+
+- Pages that build themselves in JavaScript, **Imgur included**, have nothing
+  in their HTML for the server to scrape, but the bookmarklet is running inside
+  the page and sees the real `<img>` and `<video>` elements.
+- Reddit is better scraped server-side, where `old.reddit.com` exposes every
+  comment rather than only the ones currently rendered.
+
+It follows lazy-loading `data-src`, resolves relative URLs, reads `<source>`
+and video posters, and rewrites Imgur's `.gifv` to the `.mp4` that actually
+downloads. It stops at 300 findings per page.
+
+The list travels in the URL fragment, which browsers never send to the server:
+no request-length limit, and no list of URLs in your access log.
 
 ## Duplicates
 
@@ -436,11 +448,15 @@ read from disk per request and need no restart, only a browser refresh.
 What has and hasn't been exercised, so you know where you are on your own. Each
 is a reasonable thing to pick up; none is load-bearing for the rest.
 
-- **Imgur pages do not work.** It serves a 5 KB JavaScript shell with no
-  Open Graph tags and no media links, so there is nothing to scrape without
-  their API or a headless browser. Direct `i.imgur.com/*.gif` links are fine,
-  as any direct link is. Reddit needed its own workaround (`old.reddit.com`)
-  for the same reason; Imgur has no equivalent.
+- **Imgur works through the bookmarklet, not through *Grab URL*.** Pasting an
+  Imgur page URL still fails: it serves a 5 KB JavaScript shell with no Open
+  Graph tags and nothing to scrape. The bookmarklet runs inside the rendered
+  page, so it sees the media the HTML never contained. Direct
+  `i.imgur.com/*.gif` links work either way.
+- **The bookmarklet's page scanning was verified against a local reproduction
+  of a JavaScript-rendered gallery**, not against Imgur itself, which could not
+  be reached from the development environment. The mechanism is confirmed; that
+  particular site's markup is not.
 - **Giphy search pages yield only the first handful.** They lazy-load, so a
   scrape sees roughly six. Individual GIF pages and direct media links are
   unaffected.
