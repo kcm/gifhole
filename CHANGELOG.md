@@ -20,6 +20,12 @@ losing anything. Anything that would break that is a major change.
 
 ## [Unreleased]
 
+### Added
+
+- Pushing a `vX.Y.Z` tag now publishes the matching GitHub release, with the
+  notes taken from this file so the two cannot drift. The workflow runs the
+  tests and refuses a tag that disagrees with the packaged version.
+
 ## [0.1.0] - 2026-07-19
 
 First tagged release.

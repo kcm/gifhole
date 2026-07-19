@@ -352,7 +352,13 @@ is a reasonable thing to pick up; none is load-bearing for the rest.
 
 Versions follow [SemVer](https://semver.org/): see
 [CHANGELOG.md](CHANGELOG.md) for what counts as a patch, a minor, and a major
-here. The library on disk is the compatibility surface that matters, and new
+here. Releasing is one command, since pushing the tag publishes the GitHub
+release from the changelog entry:
+
+```
+# bump version in pyproject.toml, add the CHANGELOG section, then
+git tag -a v0.2.0 -m "gifhole 0.2.0" && git push origin v0.2.0
+``` The library on disk is the compatibility surface that matters, and new
 database columns are migrated on open, so an older library keeps working.
 
 ## License

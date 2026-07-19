@@ -1,0 +1,93 @@
+# Pushing a vX.Y.Z tag publishes the matching GitHub release, so the tag and
+# the release cannot drift apart and neither has to be written by hand.
+#
+# The notes come from CHANGELOG.md, which is the one place a version is
+# described. The tests run first: a release is the worst moment to discover a
+# broken build, and this is the only gate before something is published.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  # Lets an already-pushed tag be released after the fact, which is how the
+  # first one gets a release given the tag predates this workflow.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing tag to release, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # Runs before checkout, deliberately. The dispatch input reaches `ref:`
+      # and a shell, so it is validated to a plain version tag first rather
+      # than being interpolated anywhere as free text.
+      - name: Resolve and check the tag
+        id: version
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-$REF_NAME}"
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.]+)?$'; then
+            echo "refusing a tag that is not a plain version: $TAG"
+            exit 1
+          fi
+          printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
+          printf 'number=%s\n' "${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.version.outputs.tag }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Check
+        run: |
+          uv sync
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run pytest -q
+
+      - name: Refuse a tag the package disagrees with
+        # A tag that does not match pyproject would ship a release labelled one
+        # thing and containing another.
+        env:
+          EXPECTED: ${{ steps.version.outputs.number }}
+        run: |
+          set -euo pipefail
+          PACKAGED=$(uv run python -c "import gifhole; print(gifhole.__version__)")
+          if [ "$PACKAGED" != "$EXPECTED" ]; then
+            echo "tag says $EXPECTED, package says $PACKAGED"
+            exit 1
+          fi
+
+      - name: Take the notes from the changelog
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          uv run python scripts/release_notes.py "$TAG" > NOTES.md
+          cat NOTES.md
+
+      - name: Build the distributions
+        run: uv build
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          NUMBER: ${{ steps.version.outputs.number }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --title "gifhole $NUMBER" \
+            --notes-file NOTES.md \
+            dist/*

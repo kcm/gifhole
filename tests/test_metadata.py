@@ -5,8 +5,12 @@ text through the store, which is the contract the rest of the app relies on.
 """
 
 import io
+import pathlib
+import sys
 import threading
 import time
+
+import pytest
 
 from gifhole.frames import sample_frames, to_png_bytes, upscale_for_ocr
 from gifhole.jobs import JobQueue
@@ -378,3 +382,42 @@ def test_cancel_can_target_one_kind():
     assert queue.wait_idle(5)
     assert queue.get(described.id).status == "cancelled"
     assert queue.get(ocr_job.id).status == "done"
+
+
+# -- release notes -----------------------------------------------------------
+
+
+def test_release_notes_extract_one_version():
+    """The workflow feeds this to gh, so a bad match means a wrong release."""
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
+    from release_notes import notes_for
+
+    text = (
+        "# Changelog\n\npreamble\n\n"
+        "## [Unreleased]\n\n"
+        "## [0.2.0] - 2026-08-01\n\n- newer thing\n\n"
+        "## [0.1.0] - 2026-07-19\n\n- older thing\n\n"
+        "[0.1.0]: https://example.invalid\n"
+    )
+    assert notes_for("0.2.0", text) == "- newer thing"
+    # A leading v is what a tag looks like, and must resolve the same.
+    assert notes_for("v0.1.0", text).splitlines()[0] == "- older thing"
+
+
+def test_release_notes_reject_an_unknown_version():
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
+    from release_notes import notes_for
+
+    with pytest.raises(SystemExit):
+        notes_for("9.9.9", "# Changelog\n\n## [0.1.0] - 2026-07-19\n\n- thing\n")
+
+
+def test_the_real_changelog_has_notes_for_the_current_version():
+    """Guards the release path: a version with no section fails the workflow."""
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
+    from release_notes import CHANGELOG, notes_for
+
+    import gifhole
+
+    body = notes_for(gifhole.__version__, CHANGELOG.read_text())
+    assert len(body) > 100
