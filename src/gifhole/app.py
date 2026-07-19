@@ -10,7 +10,7 @@ from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from gifhole import clipboard, fetch, ocr
+from gifhole import __version__, clipboard, fetch, ocr
 from gifhole.jobs import JobQueue
 from gifhole.store import Store, split_tags
 
@@ -153,7 +153,9 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
     @app.get("/api/library")
     def library_stats() -> JSONResponse:
         """Counts for the library panel, including what each scope would cover."""
-        return JSONResponse({"stats": store.stats(), "scopes": list(store.SCOPES)})
+        return JSONResponse(
+            {"stats": store.stats(), "scopes": list(store.SCOPES), "version": __version__}
+        )
 
     @app.get("/api/duplicates")
     def list_duplicates() -> JSONResponse:
@@ -497,6 +499,7 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
                     "enrich_reason": enrich_why,
                     "ffmpeg": fetch.ffmpeg_available(),
                     "file_clipboard": clipboard.available(),
+                    "version": __version__,
                 },
             }
         )

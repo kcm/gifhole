@@ -1391,9 +1391,12 @@ async function openLibrary() {
   }
   const s = libStats;
   const mb = s.bytes > 1048576 ? `${(s.bytes / 1048576).toFixed(0)} MB` : `${Math.round(s.bytes / 1024)} KB`;
+  // The version is here rather than tucked in a corner because a server
+  // running older code than the page it serves has already caused one
+  // baffling bug: buttons that looked live and silently did nothing.
   $("#libsummary").textContent =
-    `${plural(s.total, "GIF")} · ${mb} · ${plural(s.tags, "tag")} · ` +
-    `${s.described} described · ${s.never_ocr} never read for text`;
+    `gifhole ${body.version} · ${plural(s.total, "GIF")} · ${mb} · ` +
+    `${plural(s.tags, "tag")} · ${s.described} described`;
   paintScopeCount();
   libPanel.hidden = false;
 }

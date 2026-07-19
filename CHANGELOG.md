@@ -1,63 +1,101 @@
 # Changelog
 
 All notable changes to this project are documented here. The format is based on
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+What the parts mean here:
+
+- **Patch** (`0.1.1`): fixes that change no interface.
+- **Minor** (`0.2.0`): new features, and backwards-compatible changes to the
+  HTTP API, the CLI, or the on-disk layout.
+- **Major** (`1.0.0`): incompatible changes. While the version is `0.x` the API
+  and library format may still change between minors, as SemVer allows; `1.0.0`
+  is the point at which they stop.
+
+The **library on disk is the compatibility surface that matters most**: a
+`gifs/` folder, a `.trash/` folder, and `gifhole.db`. New database columns go
+through `MIGRATIONS`, so an older library opens in a newer gifhole without
+losing anything. Anything that would break that is a major change.
 
 ## [Unreleased]
 
-### Fixed
+## [0.1.0] - 2026-07-19
 
-- The SSRF guard is now re-applied on every redirect hop. A public URL that
+First tagged release.
+
+### Added
+
+- Local GIF library served at `127.0.0.1:8777` over a folder of `.gif` files,
+  with search, tags, inline rename, and sort by newest / name / most copied.
+- **Click to copy.** On macOS the local server puts the real file on the
+  pasteboard, so a paste into Discord or Slack stays animated; browsers cannot
+  put `image/gif` on the clipboard at all, so elsewhere it falls back to a still
+  PNG. Shift-click copies the URL, alt-click copies the file path.
+- **Automatic OCR** of burned-in text via macOS Vision, run in the background
+  on every added GIF and searchable, so "nope" finds a GIF with NOPE in it
+  without any tagging. Degrades to nothing off macOS.
+- **Claude descriptions** (opt-in, `pip install 'gifhole[enrich]'`): a
+  description, the meme's name, and tags, all searchable. Tags are pinned to the
+  library's existing vocabulary by a schema `enum`, so bulk describing makes the
+  vocabulary more consistent rather than filling it with near-synonyms. Runs per
+  GIF, over a selection, or over a scope of the whole library, always with a
+  count shown first because each GIF is one billable call.
+- **Download by URL**: a direct `.gif` link, or a page to scrape, which opens a
+  selection screen listing every GIF found. Giphy, Tenor and Reddit work
+  (Reddit via `old.reddit.com`); see "known gaps" in the README for what
+  doesn't. MP4/WebM sources are converted with ffmpeg when it is installed, and
+  skipped with a note when it is not.
+- **Adding**: drag and drop, paste a copied GIF file, drag a GIF straight off a
+  web page (the browser hands over a URL, which is then downloaded), or the
+  file picker. All file routes share one path, so all get the duplicate check.
+- **Duplicate detection** on add: SHA-256 for the same file, and a perceptual
+  hash of one frame for the same GIF resized or re-encoded. Matches are shown
+  for confirmation with add-anyway or skip per file, never rejected outright.
+  `/api/duplicates` finds copies already in the library.
+- **Tagging built for volume**: an always-open field on every card with
+  suggestions drawn from tags already in use, bulk tagging across a selection
+  (`-tag` removes), and clickable tag chips with counts.
+- **Keyboard for everything**, `?` for the map: `hjkl` and arrows to move,
+  `Enter`/`c`/`u`/`p` to copy, `t` tags, `r` renames, `e` describes, `x` trashes,
+  `z` undoes, `Space` selects, `T` opens the trash.
+- **Recoverable removal**: deleting moves files to `<root>/.trash/`, `z` undoes
+  the last removal, and the trash panel restores or permanently deletes.
+  Emptying the trash is the only operation in gifhole that destroys anything.
+- **Library panel** collecting the whole-library actions: scoped describe with
+  counts, rescan, duplicates, trash, and clear (which moves everything to the
+  trash, so it is still undoable). A queued run can be stopped from the job
+  strip.
+- **`gifhole move DEST`** relocates a library. Files only: no row holds a path,
+  so nothing needs rewriting.
+- **Selectable dot-com-era skins**, remembered across visits: memepool
+  (default), fark, zombo, webvan, pets.com, altavista, and a tongue-in-cheek
+  linkedin. Driven entirely by CSS variables and a `data-theme` attribute.
+- Background job queue with live status, `--reload` for development, and a
+  Homebrew formula with `brew services` support.
+
+### Security
+
+- The SSRF guard is re-applied on **every redirect hop**. A public URL that
   redirected to loopback was previously followed and its body returned, making
   `/api/preview` a full-read SSRF against local services.
-- Mutating routes refuse cross-site requests, so a visited page can no longer
-  trigger billable enrichment or write to the library.
+- Mutating routes refuse cross-site requests, so a visited page cannot trigger
+  billable enrichment or write to the library.
+- Trash filenames arrive from the client, so they resolve through a guard that
+  refuses anything landing outside `.trash/`.
+
+### Fixed
+
 - Importing the app module no longer creates a library, starts a worker, or
   runs OCR over the real `~/.gifhole` as a side effect.
 - A failed OCR is recorded as a failed job instead of being stored as empty
   text, which had marked the GIF as read and excluded it from future retries.
 - Deleting two same-named GIFs within one second no longer overwrites the first
   in `.trash`.
-- `Rescan` now finds files with uppercase extensions such as `FOO.GIF`.
+- `Rescan` finds files with uppercase extensions such as `FOO.GIF`.
+- API failures surface instead of passing silently: a server running older code
+  answers new routes with 404, which used to read as an empty result and showed
+  a convincing but false empty trash.
 
-### Changed
-
-- Importing a page now opens a selection screen: every GIF found is listed with
-  a checkbox (all ticked by default) plus select all / select none, and only
-  the ticked ones download. Previews load from the source on scroll, with a
-  server-side proxy as a per-image fallback.
-- Reddit page URLs now work: they resolve via `old.reddit.com` (www serves a
-  JS shell and the `.json` API 403s bots) and collect every GIF on the page,
-  comments included.
-- Homebrew formula with `brew services` support, to run gifhole in the
-  background and at login on macOS.
-- Renamed the project from `gifbox` to `gifhole`.
-- *Grab URL* now opens an inline field instead of a browser `prompt()`, which
-  some contexts suppress; the file picker input is visually-hidden rather than
-  `display:none` so the picker opens reliably.
-- The path-copy shortcut is now labelled "option" on macOS, "alt" elsewhere.
-- **Selectable dot-com-era skins**, chosen from a footer picker and remembered
-  across visits: memepool (default), fark, zombo (with animated rings), webvan,
-  pets.com, altavista, and a tongue-in-cheek linkedin that even rebrands the
-  masthead. Each carries its own period tagline. Driven entirely by CSS
-  variables + a `data-theme` attribute; no markup or behavior changes.
-
-### Added
-
-- **Automatic OCR** of burned-in text via macOS Vision, run in the background on
-  every added GIF. The text is searchable, so "nope" finds a GIF with NOPE in it
-  without any tagging. Degrades to nothing off macOS.
-- **Claude enrichment** (opt-in, `pip install 'gifhole[enrich]'`): a per-GIF
-  "describe" button that adds a one-line description, identifies the meme, and
-  suggests tags, all searchable. Requires an Anthropic API key.
-- **Download by URL**: a direct `.gif` link, or any page to scrape. Handles
-  Giphy/Tenor/Reddit/Imgur (which serve MP4) via ffmpeg conversion; pasting a
-  URL anywhere triggers it. Video is skipped gracefully when ffmpeg is absent.
-- Background job queue with live status in the UI header.
-- Local GIF library served at `127.0.0.1:8777` over a folder of `.gif` files.
-- Click to copy a GIF as a still PNG; shift-click copies its URL; alt-click
-  copies its file path.
-- Drag-and-drop upload, plus *Rescan* to index files added to the folder by hand.
-- Search across filename, title, and tags; clickable tag chips with counts.
-- Inline rename, tag editing, and sort by newest / name / most copied.
-- Delete moves files to `<root>/.trash/` rather than unlinking them.
+[Unreleased]: https://github.com/kcm/gifhole/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/kcm/gifhole/releases/tag/v0.1.0

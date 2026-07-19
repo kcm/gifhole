@@ -329,7 +329,8 @@ read from disk per request and need no restart, only a browser refresh.
 
 ## Known gaps
 
-Honest about what has and hasn't been exercised.
+What has and hasn't been exercised, so you know where you are on your own. Each
+is a reasonable thing to pick up; none is load-bearing for the rest.
 
 - **Imgur pages do not work.** It serves a 5 KB JavaScript shell with no
   Open Graph tags and no media links, so there is nothing to scrape without
@@ -348,6 +349,11 @@ Honest about what has and hasn't been exercised.
 - **URL imports skip the duplicate check.** Dropping the same Giphy GIF twice
   adds it twice; only file adds are deduped.
 - **A running server does not notice a library move.** Stop it first.
+
+Versions follow [SemVer](https://semver.org/): see
+[CHANGELOG.md](CHANGELOG.md) for what counts as a patch, a minor, and a major
+here. The library on disk is the compatibility surface that matters, and new
+database columns are migrated on open, so an older library keeps working.
 
 ## License
 
