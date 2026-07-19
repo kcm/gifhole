@@ -95,6 +95,11 @@ stray request cannot empty it.
   real library under `~/.gifhole`, started a worker thread, and ran Vision OCR
   over the user's actual GIFs whenever anything imported the module, the test
   suite included. Serve with `uvicorn --factory gifhole.app:create_app`.
+- **The bookmarklet navigates, it does not fetch.** It runs in the visited
+  page's origin, so any request it made would be cross-origin and refused by
+  `refuse_cross_site_writes`, correctly. Opening `/?add=<url>` is a plain GET
+  and needs no exception carved into that middleware; don't add one. `?add=` is
+  stripped from the address bar on arrival so a refresh cannot re-import.
 - **The token guard covers `/gifs/*` too, and that is not optional.** Those
   files are the data; protecting the API while serving the GIFs to anyone who
   asks would be theatre. It also has to be accepted as a cookie, because an

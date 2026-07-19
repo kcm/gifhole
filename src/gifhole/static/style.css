@@ -1294,3 +1294,20 @@ button.danger {
   padding-top: 3px;
   margin-top: 1px;
 }
+
+/* Looks like a bookmark to drag, not a button to press. */
+.bookmarklet {
+  display: inline-block;
+  padding: 3px 12px;
+  color: var(--btn-color);
+  background: var(--btn-bg);
+  border: var(--btn-border);
+  border-radius: var(--btn-radius);
+  font-size: 13px;
+  text-decoration: none;
+  cursor: grab;
+}
+
+.bookmarklet:active {
+  cursor: grabbing;
+}

@@ -35,6 +35,10 @@ losing anything. Anything that would break that is a major change.
 
 ### Added
 
+- **Bookmarklet** offered from the library panel: drag it to the bookmarks
+  bar, press it on any page with GIFs, and gifhole opens ready to import that
+  page. Navigates rather than calling the API, so it needs no CORS exception
+  and no extension.
 - **Optional shared token** (`--token`, `GIFHOLE_TOKEN`) for running gifhole
   somewhere other than the machine you are sitting at. Off by default, so a
   loopback install is unchanged. Covers every route including `/gifs/*`;

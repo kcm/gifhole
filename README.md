@@ -34,6 +34,25 @@ it somewhere else with `--root ~/Pictures/gifs`.
 Dropping files into the `gifs/` folder by hand works too; press *Rescan* to
 pick them up.
 
+## Adding from any page
+
+*Library* offers a **bookmarklet**: drag *Add to gifhole* to your bookmarks
+bar, then press it on any page with GIFs. It opens gifhole with that page ready
+to import, so a page gives you the selection screen and a direct link imports
+straight away.
+
+It navigates rather than calling the API. A bookmarklet runs in the visited
+page's origin, so a request from there would be cross-origin and refused by the
+same check that stops a random site driving your library. Opening a URL is a
+plain page load and needs no exception. The bookmark is built from whatever
+address you are using, so it works on a different port or a server, and if a
+token is set it relies on the cookie from your last visit.
+
+It only sends the page's address, so it inherits whatever the server-side
+scraper can do: Giphy, Tenor and Reddit yes, Imgur no. A version that scanned
+the rendered page instead would fix Imgur, at the cost of a much longer
+bookmarklet.
+
 ## Duplicates
 
 Adding a GIF you already have opens a review panel showing the incoming file

@@ -1401,6 +1401,31 @@ async function openLibrary() {
   libPanel.hidden = false;
 }
 
+// Built from location.origin, so it points at wherever this instance actually
+// is: a different port, or a server, not a hardcoded 127.0.0.1.
+//
+// It navigates rather than fetching. A bookmarklet runs in the visited page's
+// origin, so a fetch here would be cross-origin and would be refused by the
+// same middleware that stops a random site driving your library. Opening a URL
+// is a plain top-level GET and sidesteps all of it.
+function bookmarkletSource() {
+  const target = `${location.origin}/?add=`;
+  return (
+    "javascript:(function(){window.open(" +
+    JSON.stringify(target) +
+    "+encodeURIComponent(location.href),'_blank');})()"
+  );
+}
+
+const bookmarklet = $("#bookmarklet");
+// href as a property, never interpolated into markup.
+bookmarklet.href = bookmarkletSource();
+bookmarklet.addEventListener("click", (e) => {
+  // Clicking it here would try to add gifhole itself. It is for dragging.
+  e.preventDefault();
+  toast("drag it to your bookmarks bar, then press it on a page with GIFs");
+});
+
 libScope.addEventListener("change", paintScopeCount);
 $("#librarybtn").addEventListener("click", openLibrary);
 $("#libclose").addEventListener("click", closeLibrary);
@@ -1801,5 +1826,21 @@ addEventListener("keydown", (e) => {
 
 help.addEventListener("click", closeHelp);
 
+// Arriving from the bookmarklet: ?add=<page url>. Handled as a normal grab, so
+// a page opens the selection screen and a direct link imports straight away.
+function handleAddParam() {
+  const params = new URLSearchParams(location.search);
+  const url = params.get("add");
+  if (!url) return;
+  // Clean it out of the address bar first, so a refresh does not add it twice
+  // and the URL is not left carrying someone else's link.
+  params.delete("add");
+  const rest = params.toString();
+  history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : ""));
+  if (/^https?:\/\//i.test(url)) grab(url);
+  else toast("that bookmark did not carry a usable link");
+}
+
 load();
 pollJobs();
+handleAddParam();
