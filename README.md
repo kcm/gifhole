@@ -20,12 +20,30 @@ it somewhere else with `--root ~/Pictures/gifs`.
 - **paste a URL**, or press *Grab URL* and type one, to download from a `.gif`
   link or scrape a page. Giphy, Tenor, Reddit, and Imgur included
 - **`/`** focuses search, **Esc** clears search and tag filters
-- click a name to rename it; click *tags* to tag it; click a tag chip to filter
+- click a name to rename it
 - pick a **skin** from the footer: memepool, fark, zombo, webvan, pets.com,
   altavista, or a straight-faced linkedin; your choice is remembered
 
 Dropping files into the `gifs/` folder by hand works too; press *Rescan* to
 pick them up.
+
+## Tagging
+
+Tags are the filing system, so adding one is meant to cost nothing. Every card
+carries an always-open field: click it, or hover the card and press **`t`**.
+
+- type and press **Enter**, **Tab**, **space** or **comma** to file a tag; the
+  field stays focused for the next one
+- **suggestions come from tags you already use**, ranked by how often, so you
+  reuse *reaction* instead of quietly inventing *reactions* and splitting the
+  shelf. Arrow keys pick, Enter accepts
+- **paste** `funny reaction dog` to get three tags at once
+- **backspace** on an empty field removes the last tag; each tag also has an
+  **x**
+- **click a tag** on a card to see everything else filed under it
+
+Nothing here reloads the page, so you can work down a wall of GIFs without
+losing your place. Tag counts in the header update as you go.
 
 ## Finding GIFs by what's in them
 

@@ -318,20 +318,139 @@ button.primary {
 }
 
 .rowtags {
+  position: relative;
   padding: 0 8px 6px;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 6px;
-  align-items: baseline;
+  gap: 4px;
+  align-items: center;
   font-size: 12px;
   color: var(--panel-ink);
 }
 
-.rowtags .t {
+/* The chips are laid out by .rowtags itself, so they wrap alongside the input
+   rather than as one block that pushes it to its own line. */
+.chips {
+  display: contents;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--rule);
+  border-radius: var(--btn-radius, 4px);
+  max-width: 100%;
+}
+
+.chiplabel,
+.chipx {
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+  color: var(--panel-ink);
+  text-decoration: none;
+  padding: 0 5px;
+}
+
+.chiplabel {
+  max-width: 11em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chipx {
+  color: var(--panel-muted);
+  padding-left: 2px;
+}
+
+.chiplabel:hover,
+.chipx:hover {
+  color: var(--link-hot);
+}
+
+/* Always present and always ready, so adding a tag is one click, not a click
+   to reveal a field and then another to focus it. */
+.taginput {
+  flex: 1 1 4.5em;
+  min-width: 4.5em;
+  background: none;
+  border: none;
+  border-bottom: 1px dashed transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--panel-ink);
+  padding: 1px 0;
+  outline: none;
+}
+
+.taginput::placeholder {
   color: var(--panel-muted);
 }
 
-.rowtags .edit,
+.taginput:hover {
+  border-bottom-color: var(--rule);
+}
+
+.taginput:focus {
+  border-bottom-color: var(--link);
+}
+
+/* .card clips its children so the figure keeps square corners; a card being
+   tagged lifts that so the suggestion list can overhang, and rises above its
+   neighbours in the grid. */
+.card.tagging {
+  overflow: visible;
+  position: relative;
+  z-index: 5;
+}
+
+.ac {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 8px;
+  right: 8px;
+  margin: 0;
+  padding: 2px;
+  list-style: none;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--btn-radius, 4px);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
+  max-height: 190px;
+  overflow-y: auto;
+}
+
+.acitem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--panel-ink);
+}
+
+.acitem.on {
+  background: var(--link);
+  color: var(--btn-color, #ffffff);
+}
+
+.acitem.on .acn {
+  color: inherit;
+}
+
+.acn {
+  color: var(--panel-muted);
+  font-size: 10px;
+}
+
 .card .del,
 .card .describe {
   background: none;
@@ -344,7 +463,6 @@ button.primary {
   font-size: 12px;
 }
 
-.rowtags .edit:hover,
 .card .del:hover,
 .card .describe:hover {
   color: var(--link-hot);
@@ -616,7 +734,7 @@ footer select {
 }
 :root[data-theme="zombo"] .tag,
 :root[data-theme="zombo"] .card .describe,
-:root[data-theme="zombo"] .rowtags .edit {
+:root[data-theme="zombo"] .rowtags .chiplabel {
   font-weight: bold;
 }
 :root[data-theme="zombo"] button {

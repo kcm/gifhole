@@ -131,6 +131,24 @@ Deletes move files to `.trash/`, they do not unlink. Preserve that.
   Rendering before it resolves greys out a working button.
 - ffmpeg conversion uses `scale='min(W,iw)'`, capping and never upscaling. Forcing
   a small clip up to a fixed width multiplied file size ~2x for zero gain.
+- **Tagging is the primary filing mechanism; keep it cheap.** The chip input in
+  `tagEditor()` is built around that: the field is always open (no click to
+  reveal), a commit leaves it focused for the next tag, and **nothing in the
+  editor calls `load()`**. A reload per tag refetches the library and rebuilds
+  every card, throwing away scroll position and focus mid-file. Tag-bar counts
+  are instead adjusted locally by `bumpTag()`, which a later `load()`
+  reconciles against the server's authoritative numbers.
+- **Separators are handled on `input`, not `keydown`.** Committing a tag on a
+  space *keypress* silently ignores paste, autofill and IME input, none of which
+  fire a keydown. Watching the value means pasting `funny reaction dog` files
+  two tags and leaves `dog` editable. Keep Enter/Tab/arrows on keydown, where
+  they belong; don't move space and comma back.
+- **The suggestion list is the point, not decoration.** It is what stops
+  `reaction` and `reactions` becoming two shelves with half the library each.
+  Prefix matches rank above substring, then by count.
+- **`.card` clips its children**, so the suggestion list only escapes because
+  `.card.tagging` lifts `overflow` and raises `z-index` while a card is being
+  tagged. Removing that class hook makes the dropdown a hairline again.
 - **Don't gate features behind native `prompt()`/`alert()`/file dialogs.**
   Embedded and preview contexts silently suppress them, and browsers let users
   permanently disable dialogs, so a button that only calls `prompt()` looks dead.

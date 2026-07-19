@@ -116,7 +116,9 @@ function card(gif) {
       <button class="del" title="move to trash">x</button>
     </div>
     <div class="rowtags">
-      <span class="t"></span><button class="edit" title="edit tags">tags</button>
+      <span class="chips"></span>
+      <input class="taginput" spellcheck="false" autocomplete="off" aria-label="add a tag">
+      <ul class="ac" hidden></ul>
     </div>
     <div class="ocr">
       <span class="quote"></span>
@@ -152,34 +154,13 @@ function card(gif) {
   });
   name.addEventListener("blur", () => patch(gif.id, { title: name.textContent.trim() }));
 
-  // Edited in place rather than via prompt(): suppressed dialogs would leave
-  // tagging with no working affordance at all.
-  const tagsEl = el.querySelector(".t");
-  tagsEl.textContent = gif.tags.length ? gif.tags.join(" ") : "untagged";
-  el.querySelector(".edit").addEventListener("click", () => {
-    tagsEl.contentEditable = "plaintext-only";
-    tagsEl.textContent = gif.tags.join(" ");
-    tagsEl.focus();
-    const range = document.createRange();
-    range.selectNodeContents(tagsEl);
-    const selection = getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-  });
-  // Enter saves directly rather than by triggering blur. Leaning on blur alone
-  // is fragile: the element can lose focus without the handler running, which
-  // silently drops the edit.
-  const saveTags = async () => {
-    if (tagsEl.contentEditable !== "plaintext-only") return;
-    tagsEl.contentEditable = "false";
-    await patch(gif.id, { tags: tagsEl.textContent.trim() });
-    load();
-  };
-  tagsEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); saveTags(); }
-    if (e.key === "Escape") { tagsEl.contentEditable = "false"; load(); }
-  });
-  tagsEl.addEventListener("blur", saveTags);
+  // Tagging is the primary filing mechanism, so it is a chip input rather than
+  // a blob of text: one tag is one object you can drop, the field is always
+  // open for the next one, and nothing here calls load(). A full reload per tag
+  // would refetch the library and rebuild every card, losing scroll position
+  // and focus mid-file.
+  tagEditor(el, gif);
+
   el.querySelector(".del").addEventListener("click", async () => {
     if (!confirm(`Move ${gif.filename} to .trash?`)) return;
     await fetch(`/api/gifs/${gif.id}`, { method: "DELETE" });
@@ -189,6 +170,225 @@ function card(gif) {
 
   el.querySelector("figure").addEventListener("click", (e) => handleClick(e, gif, el));
   return el;
+}
+
+// The vocabulary drives autocomplete, so it is kept current locally instead of
+// being refetched: adding a tag adjusts its count in place. A later load()
+// replaces these with the server's authoritative numbers.
+function bumpTag(tag, delta) {
+  const row = state.tags.find((r) => r.tag === tag);
+  if (row) {
+    row.count += delta;
+    if (row.count <= 0) state.tags = state.tags.filter((r) => r !== row);
+  } else if (delta > 0) {
+    state.tags.push({ tag, count: 1 });
+  }
+  state.tags.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+  renderTags();
+}
+
+// Mirrors split_tags() on the server, so what you see on the chip is what got
+// stored: lowercased, split on whitespace and commas.
+function splitTags(raw) {
+  return raw.toLowerCase().replace(/,/g, " ").split(/\s+/).filter(Boolean);
+}
+
+function tagEditor(el, gif) {
+  const chipsEl = el.querySelector(".chips");
+  const input = el.querySelector(".taginput");
+  const acEl = el.querySelector(".ac");
+  let tags = [...gif.tags];
+  let items = [];
+  let cursor = -1;
+
+  // Serialised: each PATCH carries the whole tag list, so two in flight at once
+  // could land out of order and resurrect a tag that was just removed.
+  let pending = Promise.resolve();
+  const save = () => {
+    gif.tags = [...tags];
+    const body = { tags: tags.join(" ") };
+    pending = pending.then(() => patch(gif.id, body));
+    return pending;
+  };
+
+  const renderChips = () => {
+    chipsEl.replaceChildren(
+      ...tags.map((tag) => {
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        // The label filters (recall), the x removes (filing). Two jobs, two
+        // targets, so neither gesture can trigger the other by accident.
+        const label = document.createElement("button");
+        label.className = "chiplabel";
+        label.textContent = tag;
+        label.title = `show everything tagged ${tag}`;
+        label.addEventListener("click", () => {
+          activeTags.add(tag);
+          load();
+        });
+        const x = document.createElement("button");
+        x.className = "chipx";
+        x.textContent = "×";
+        x.title = `remove ${tag}`;
+        x.tabIndex = -1;
+        x.addEventListener("click", () => remove(tag));
+        chip.append(label, x);
+        return chip;
+      }),
+    );
+    input.placeholder = tags.length ? "+tag" : "add tags";
+  };
+
+  const add = (raw) => {
+    let changed = false;
+    for (const tag of splitTags(raw)) {
+      if (tags.includes(tag)) continue;
+      tags.push(tag);
+      bumpTag(tag, +1);
+      changed = true;
+    }
+    if (changed) {
+      renderChips();
+      save();
+    }
+  };
+
+  const remove = (tag) => {
+    const i = tags.indexOf(tag);
+    if (i < 0) return;
+    tags.splice(i, 1);
+    bumpTag(tag, -1);
+    renderChips();
+    save();
+  };
+
+  const closeAc = () => {
+    acEl.hidden = true;
+    items = [];
+    cursor = -1;
+    el.classList.remove("tagging");
+  };
+
+  const paint = () => {
+    [...acEl.children].forEach((li, i) => li.classList.toggle("on", i === cursor));
+  };
+
+  // Suggesting from the existing vocabulary is the point of the whole control:
+  // it is what stops "reaction" and "reactions" becoming two shelves holding
+  // half the collection each. Prefix matches rank above substring, then by use.
+  const openAc = () => {
+    const typed = input.value.trim().toLowerCase();
+    const pool = state.tags
+      .filter(({ tag }) => !tags.includes(tag) && tag.includes(typed))
+      .sort((a, b) => {
+        const ap = a.tag.startsWith(typed);
+        const bp = b.tag.startsWith(typed);
+        if (ap !== bp) return ap ? -1 : 1;
+        return b.count - a.count || a.tag.localeCompare(b.tag);
+      })
+      .slice(0, 8);
+    items = pool.map((p) => p.tag);
+    if (!items.length) return closeAc();
+    acEl.replaceChildren(
+      ...pool.map(({ tag, count }, i) => {
+        const li = document.createElement("li");
+        li.className = "acitem";
+        const n = document.createElement("span");
+        n.className = "acn";
+        n.textContent = count;
+        li.append(tag, n);
+        // mousedown, not click: click fires after blur, which would have
+        // already closed the list out from under the pointer.
+        li.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          commit(tag);
+        });
+        li.addEventListener("mouseenter", () => {
+          cursor = i;
+          paint();
+        });
+        return li;
+      }),
+    );
+    acEl.hidden = false;
+    // .card clips its contents so the figure keeps square corners; the dropdown
+    // has to escape that box, but only while this card is being tagged.
+    el.classList.add("tagging");
+    cursor = -1;
+    paint();
+  };
+
+  const commit = (value) => {
+    add(value);
+    input.value = "";
+    closeAc();
+    input.focus();
+  };
+
+  input.addEventListener("focus", openAc);
+
+  // A separator commits, and it is handled here rather than on keydown so that
+  // paste, autofill and IME input work too: those deliver text with no keydown
+  // at all. Pasting "reaction meme dog" therefore lands two chips and leaves
+  // "dog" in the field, still editable.
+  input.addEventListener("input", () => {
+    if (/[\s,]/.test(input.value)) {
+      const finished = /[\s,]$/.test(input.value);
+      const parts = splitTags(input.value);
+      const remainder = finished ? "" : (parts.pop() ?? "");
+      if (parts.length) add(parts.join(" "));
+      input.value = remainder;
+    }
+    openAc();
+  });
+  input.addEventListener("blur", () => {
+    // Commit rather than discard: typing a tag and clicking away should file
+    // it, not throw it out silently.
+    if (input.value.trim()) {
+      add(input.value);
+      input.value = "";
+    }
+    closeAc();
+  });
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (acEl.hidden) return openAc();
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      if (cursor < 0) cursor = step > 0 ? 0 : items.length - 1;
+      else cursor = (cursor + step + items.length) % items.length;
+      paint();
+      return;
+    }
+    // Space and comma are not listed here on purpose; the input handler above
+    // catches them, so every route into the field behaves the same.
+    if (e.key === "Enter" || e.key === "Tab") {
+      const picked = cursor >= 0 ? items[cursor] : input.value.trim();
+      if (!picked) {
+        if (e.key === "Enter") input.blur();
+        return;
+      }
+      e.preventDefault();
+      commit(picked);
+      return;
+    }
+    if (e.key === "Escape") {
+      // Stop the global handler, which would otherwise wipe search and filters
+      // just because you backed out of a suggestion list.
+      e.stopPropagation();
+      if (!acEl.hidden) return closeAc();
+      input.value = "";
+      input.blur();
+      return;
+    }
+    if (e.key === "Backspace" && !input.value && tags.length) {
+      e.preventDefault();
+      remove(tags[tags.length - 1]);
+    }
+  });
+
+  renderChips();
 }
 
 function renderTags() {
@@ -556,7 +756,8 @@ $("#file").addEventListener("change", (e) => upload(e.target.files));
   if (hintEl) {
     hintEl.textContent =
       `click copies the image · shift-click copies the URL · ` +
-      `${isMac ? "option" : "alt"}-click copies the file path`;
+      `${isMac ? "option" : "alt"}-click copies the file path · ` +
+      `press t to tag whatever you're pointing at`;
   }
 }
 $("#rescan").addEventListener("click", async () => {
@@ -652,11 +853,33 @@ search.addEventListener("input", () => {
   searchTimer = setTimeout(load, 180);
 });
 sortSel.addEventListener("change", () => load());
+// "t" tags whatever the pointer is over, so filing a batch is hover, t, type,
+// Enter, without ever going for the mouse a second time.
+let hoveredCard = null;
+grid.addEventListener("mouseover", (e) => {
+  hoveredCard = e.target.closest?.(".card") || null;
+});
+grid.addEventListener("mouseleave", () => (hoveredCard = null));
+
+const isTyping = (node) =>
+  node instanceof HTMLElement &&
+  (node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.isContentEditable);
+
 addEventListener("keydown", (e) => {
-  if (e.key === "/" && document.activeElement !== search) { e.preventDefault(); search.focus(); }
+  const typing = isTyping(e.target);
   if (e.key === "Escape") {
     if (!picker.hidden) return closePicker();
+    if (typing) return;
     search.value = ""; activeTags.clear(); load(); search.blur();
+    return;
+  }
+  // Every other shortcut is a plain letter, so it must not fire mid-word in a
+  // tag field, a rename, or the search box.
+  if (typing) return;
+  if (e.key === "/") { e.preventDefault(); search.focus(); }
+  if (e.key === "t" && hoveredCard) {
+    e.preventDefault();
+    hoveredCard.querySelector(".taginput")?.focus();
   }
 });
 
