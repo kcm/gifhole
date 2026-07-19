@@ -610,3 +610,53 @@ def test_public_reads_without_a_write_token_is_ignored(tmp_path):
 
     client = TestClient(create_app(tmp_path, auto_ocr=False, public_reads=True))
     assert client.post("/api/rescan").status_code == 200
+
+
+# -- the whole access model, in one table ------------------------------------
+
+# configuration -> {caller: (read allowed, write allowed)}. Written out rather
+# than derived, so a change to the rules has to be stated here deliberately
+# instead of the test quietly agreeing with whatever the code now does.
+ACCESS_MATRIX = [
+    ("open by default", {}, {None: (True, True), "W": (True, True), "R": (True, True)}),
+    (
+        "write token only, so it gates reads too",
+        {"token": "W"},
+        {None: (False, False), "W": (True, True), "R": (False, False)},
+    ),
+    (
+        "two tokens, one for each level",
+        {"token": "W", "read_token": "R"},
+        {None: (False, False), "W": (True, True), "R": (True, False)},
+    ),
+    (
+        "public gallery, private admin",
+        {"token": "W", "public_reads": True},
+        {None: (True, False), "W": (True, True), "R": (True, False)},
+    ),
+    (
+        "a read token alone changes nothing",
+        {"read_token": "R"},
+        {None: (True, True), "W": (True, True), "R": (True, True)},
+    ),
+    (
+        "public reads alone changes nothing",
+        {"public_reads": True},
+        {None: (True, True), "W": (True, True), "R": (True, True)},
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "config", "expected"), ACCESS_MATRIX, ids=[m[0] for m in ACCESS_MATRIX]
+)
+def test_access_matrix(tmp_path, label, config, expected):
+    from gifhole.app import create_app
+
+    client = TestClient(create_app(tmp_path, auto_ocr=False, **config))
+    for caller, (may_read, may_write) in expected.items():
+        headers = {"Authorization": f"Bearer {caller}"} if caller else {}
+        read = client.get("/api/gifs", headers=headers).status_code
+        write = client.post("/api/rescan", headers=headers).status_code
+        assert (read < 300) is may_read, f"{label}: {caller or 'nobody'} read got {read}"
+        assert (write < 300) is may_write, f"{label}: {caller or 'nobody'} write got {write}"
