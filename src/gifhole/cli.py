@@ -134,6 +134,12 @@ def main() -> None:
         help="a second token that can look but not touch (or GIFHOLE_READ_TOKEN). "
         "Needs --token as well, or it would do nothing",
     )
+    parser.add_argument(
+        "--public-reads",
+        action="store_true",
+        help="let anyone browse without a token, while writes still need --token "
+        "(or GIFHOLE_PUBLIC_READS=1). Needs --token as well",
+    )
     # Optional on purpose: bare `gifhole` still means "serve the library", so
     # the subparser must not be required.
     commands = parser.add_subparsers(dest="command")
@@ -157,6 +163,8 @@ def main() -> None:
         os.environ["GIFHOLE_TOKEN"] = args.token
     if args.read_token:
         os.environ["GIFHOLE_READ_TOKEN"] = args.read_token
+    if args.public_reads:
+        os.environ["GIFHOLE_PUBLIC_READS"] = "1"
     if _configured_token(args.token):
         print(f"        access: token required, add ?token=... to {url} once", flush=True)
 
@@ -167,6 +175,7 @@ def main() -> None:
                 args.root,
                 token=args.token or None,
                 read_token=args.read_token or None,
+                public_reads=args.public_reads or None,
             ),
             **common,
         )

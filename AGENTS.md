@@ -111,6 +111,11 @@ stray request cannot empty it.
   `refuse_cross_site_writes`, correctly. Opening `/?add=<url>` is a plain GET
   and needs no exception carved into that middleware; don't add one. `?add=` is
   stripped from the address bar on arrival so a refresh cannot re-import.
+- **`WRITER_ONLY_PATHS` is the one exception to the method rule, and it is not
+  optional.** `/api/preview` is a `GET` that makes the server fetch a
+  caller-chosen URL; public reads would make it an open proxy on the host's
+  bandwidth and IP. Any future route that causes an outbound request or costs
+  money belongs in that tuple regardless of its method.
 - **Read-only is decided by HTTP method, not by a list of routes.** Anything
   outside `READ_ONLY_METHODS` is refused for a read token. Enumerating writable
   routes would mean every new route is a chance to forget, and forgetting would

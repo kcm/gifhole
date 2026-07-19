@@ -314,7 +314,25 @@ the data.
 
 ### Letting someone else look
 
-A second token can browse but not change anything:
+The simplest version needs no second token at all: let anyone browse, and keep
+writes behind yours.
+
+```
+gifhole --host 0.0.0.0 --token "$(openssl rand -hex 24)" --public-reads
+```
+
+Visitors can search, browse and copy, and the interface hides everything else.
+Adding, tagging, deleting and describing still need your token. It is worth
+being clear about what that means: **your whole library is public to anyone who
+can reach the address**, and so is anything you add to it later.
+
+`/api/preview` is deliberately **not** public even though it is a `GET`. It
+makes the server fetch a URL the caller chooses, so leaving it open would be an
+open proxy on your bandwidth and IP address. It only exists to preview import
+candidates, which is your flow, not a visitor's.
+
+If you would rather not be world-readable, a second token can browse but not
+change anything:
 
 ```
 gifhole --host 0.0.0.0 --token "$(openssl rand -hex 24)" \
@@ -327,8 +345,9 @@ those controls rather than offering buttons that fail. The rule is blunt on
 purpose: anything that is not a `GET` is refused, so a route added later cannot
 quietly become writable by a guest.
 
-`--read-token` needs `--token` as well. On its own it would read like access
-control while leaving every write wide open, so it is ignored with a warning.
+`--read-token` and `--public-reads` both need `--token` as well. On their own
+they would read like access control while leaving every write wide open, so
+they are ignored with a warning.
 
 The tokens are shared secrets over plain HTTP, so they are only as private as
 the network. For anything beyond a trusted LAN, put it behind a reverse proxy

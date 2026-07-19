@@ -49,6 +49,16 @@ COOKIE = "gifhole_token"
 # write.
 READ_ONLY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
+# Reads that are not really reads. /api/preview is a GET, but it makes the
+# server fetch a URL chosen by the caller, so leaving it open would be an open
+# proxy on someone else's bandwidth and IP. It exists only to preview import
+# candidates, which is a writer's flow, so it is treated as a write.
+WRITER_ONLY_PATHS = ("/api/preview",)
+
+
+def needs_a_writer(method: str, path: str) -> bool:
+    return method not in READ_ONLY_METHODS or path.startswith(WRITER_ONLY_PATHS)
+
 
 def configured_token(explicit: str | None = None) -> str:
     return explicit or os.environ.get("GIFHOLE_TOKEN", "")
@@ -58,20 +68,35 @@ def configured_read_token(explicit: str | None = None) -> str:
     return explicit or os.environ.get("GIFHOLE_READ_TOKEN", "")
 
 
+def configured_public_reads(explicit: bool | None = None) -> bool:
+    if explicit is not None:
+        return explicit
+    return os.environ.get("GIFHOLE_PUBLIC_READS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def create_app(
     root: Path | None = None,
     *,
     auto_ocr: bool = True,
     token: str | None = None,
     read_token: str | None = None,
+    public_reads: bool | None = None,
 ) -> FastAPI:
     token = configured_token(token)
     read_token = configured_read_token(read_token)
+    public_reads = configured_public_reads(public_reads)
     # A read token on its own would be worse than none: writes would still be
     # wide open while the config looked like it said otherwise.
     if read_token and not token:
         log.warning("GIFHOLE_READ_TOKEN ignored: it does nothing without GIFHOLE_TOKEN")
         read_token = ""
+    if public_reads and not token:
+        # Without a write token this would not be "public reads", it would be
+        # public everything, which is what no configuration already means.
+        log.warning("public reads ignored: without GIFHOLE_TOKEN, writes are open too")
+        public_reads = False
+    if public_reads and read_token:
+        log.warning("GIFHOLE_READ_TOKEN is redundant while reads are public")
     store = Store(root or default_root())
     store.rescan()
     jobs = JobQueue()
@@ -114,20 +139,32 @@ def create_app(
         # reject however much of it was right.
         writer = bool(offered) and secrets.compare_digest(offered, token)
         reader = bool(offered and read_token) and secrets.compare_digest(offered, read_token)
+        writer_only = needs_a_writer(request.method, request.url.path)
 
-        if not (writer or reader):
-            return JSONResponse(
-                {"detail": "a token is required; add ?token=... once, or an Authorization header"},
-                status_code=401,
-            )
-        if reader and request.method not in READ_ONLY_METHODS:
-            return JSONResponse(
-                {"detail": "that token can look, not touch"},
-                status_code=403,
-            )
+        if not writer:
+            if writer_only:
+                # A reader who reached for something only a writer can do gets
+                # 403; a stranger gets 401, because their answer is different:
+                # one needs a better token, the other needs any token.
+                status, detail = (
+                    (403, "that token can look, not touch")
+                    if reader
+                    else (401, "a token is required for that")
+                )
+                if not (reader or public_reads):
+                    detail = "a token is required; add ?token=... once, or an Authorization header"
+                return JSONResponse({"detail": detail}, status_code=status)
+            if not (reader or public_reads):
+                return JSONResponse(
+                    {
+                        "detail": "a token is required; add ?token=... once, "
+                        "or an Authorization header"
+                    },
+                    status_code=401,
+                )
         # Recorded so a route can report it; the UI hides what it cannot do
         # rather than offering buttons that come back 403.
-        request.state.read_only = reader
+        request.state.read_only = not writer
 
         response = await call_next(request)
         if request.query_params.get("token"):

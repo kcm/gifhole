@@ -550,3 +550,63 @@ def test_a_read_token_alone_does_nothing(tmp_path):
     client = TestClient(create_app(tmp_path, auto_ocr=False, read_token="guest"))
     assert client.get("/api/gifs").status_code == 200
     assert client.get("/api/gifs", headers={"Authorization": "Bearer guest"}).status_code == 200
+
+
+# -- public reads ------------------------------------------------------------
+
+
+@pytest.fixture
+def gallery(tmp_path):
+    """Anyone may look; only the token holder may change anything."""
+    from gifhole.app import create_app
+
+    return TestClient(create_app(tmp_path, auto_ocr=False, token="owner", public_reads=True))
+
+
+def test_anyone_can_browse_without_a_token(gallery):
+    assert gallery.get("/api/gifs").status_code == 200
+    assert gallery.get("/").status_code == 200
+
+
+def test_a_stranger_still_cannot_write(gallery):
+    assert gallery.post("/api/rescan").status_code == 401
+    assert gallery.post("/api/gifs/clear", json={"confirm": "clear"}).status_code == 401
+
+
+def test_the_owner_can_still_write(gallery):
+    assert gallery.post("/api/rescan", headers={"Authorization": "Bearer owner"}).status_code == 200
+
+
+def test_the_preview_proxy_is_not_public(gallery):
+    """It is a GET, but it makes the server fetch a URL of the caller's
+    choosing. Public reads would make it an open proxy."""
+    assert (
+        gallery.get("/api/preview", params={"url": "https://example.invalid/x.gif"}).status_code
+        == 401
+    )
+
+
+def test_the_owner_may_still_preview(gallery, monkeypatch):
+    from gifhole import fetch
+
+    monkeypatch.setattr(fetch, "fetch_bytes_cached", lambda *a, **k: b"GIF89a")
+    res = gallery.get(
+        "/api/preview",
+        params={"url": "https://example.com/x.gif"},
+        headers={"Authorization": "Bearer owner"},
+    )
+    assert res.status_code == 200
+
+
+def test_a_stranger_is_told_the_page_is_read_only(gallery):
+    caps = gallery.get("/api/jobs").json()["capabilities"]
+    assert caps["read_only"] is True
+
+
+def test_public_reads_without_a_write_token_is_ignored(tmp_path):
+    """Otherwise it would not be "public reads", it would be public everything,
+    which is what no configuration already means."""
+    from gifhole.app import create_app
+
+    client = TestClient(create_app(tmp_path, auto_ocr=False, public_reads=True))
+    assert client.post("/api/rescan").status_code == 200

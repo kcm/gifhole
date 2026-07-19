@@ -60,6 +60,9 @@ losing anything. Anything that would break that is a major change.
   the DOM while Reddit still benefits from server-side scraping. Navigates
   rather than calling the API, so it needs no CORS exception and no
   extension.
+- **`--public-reads`**: let anyone browse without a token while writes stay
+  behind yours. `/api/preview` is excluded, since it fetches a URL of the
+  caller's choosing and would otherwise be an open proxy.
 - **Read-only token** (`--read-token`, `GIFHOLE_READ_TOKEN`) so a library can
   be shared without handing over the ability to change it. Anything that is not
   a read is refused, and the interface hides the controls a guest cannot use.
