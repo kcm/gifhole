@@ -1321,7 +1321,10 @@ $("#libdupes").addEventListener("click", async () => {
 
 const trashPanel = $("#trash");
 const trashList = $("#trashlist");
-const closeTrash = () => (trashPanel.hidden = true);
+const closeTrash = () => {
+  trashPanel.hidden = true;
+  disarmEmpty?.();
+};
 
 async function openTrash() {
   let data;
@@ -1339,6 +1342,7 @@ async function openTrash() {
     ? `${entries.length} in the trash`
     : "the trash is empty";
   $("#trashempty").disabled = !entries.length;
+  disarmEmpty?.();
   $("#trashdir").textContent = data.dir || "";
 
   trashList.replaceChildren(
@@ -1367,14 +1371,15 @@ async function openTrash() {
       const gone = document.createElement("button");
       gone.className = "linkish danger";
       gone.textContent = "delete";
-      gone.addEventListener("click", async () => {
-        if (!confirm(`Delete ${entry.filename} for good? This cannot be undone.`)) return;
+      armable(gone, "really?", async () => {
         try {
           await postJSON("/api/trash/purge", { names: [entry.name] });
         } catch (err) {
           return toast(`delete failed: ${err.message}`);
         }
-        openTrash();
+        row.remove();
+        toast(`deleted ${entry.filename} for good`);
+        if (!trashList.children.length) closeTrash();
       });
       row.append(name, when, put, gone);
       return row;
@@ -1421,19 +1426,41 @@ async function postJSON(url, body) {
 
 $("#trashbtn").addEventListener("click", openTrash);
 $("#trashclose").addEventListener("click", closeTrash);
-$("#trashempty").addEventListener("click", async () => {
-  // Everything else in gifhole is recoverable; this is the one place that
-  // isn't, so it asks plainly and says so.
-  if (!confirm("Delete everything in the trash for good? This cannot be undone.")) return;
-  let out;
+// Arms in place rather than opening a confirm() on top of the panel: stacking
+// a dialog over a dialog is horrible, but this is still the one action in
+// gifhole that destroys anything, so it does not go on a single click either.
+// One press arms it, a second does it, anything else disarms.
+function armable(button, armedLabel, run) {
+  const idle = button.textContent;
+  const disarm = () => {
+    button.textContent = idle;
+    button.classList.remove("armed");
+    delete button.dataset.armed;
+  };
+  button.addEventListener("click", async () => {
+    if (!button.dataset.armed) {
+      button.dataset.armed = "1";
+      button.textContent = armedLabel;
+      button.classList.add("armed");
+      return;
+    }
+    disarm();
+    await run();
+  });
+  return disarm;
+}
+
+const disarmEmpty = armable($("#trashempty"), "Really? No undo", async () => {
   try {
-    out = await postJSON("/api/trash/purge", { all: true });
+    const out = await postJSON("/api/trash/purge", { all: true });
+    lastTrashed = [];
+    // Closes rather than re-rendering an empty list: the panel exists to show
+    // what you can still get back, and there is nothing left.
+    closeTrash();
+    toast(`deleted ${out.purged} for good`);
   } catch (err) {
-    return toast(`could not empty the trash: ${err.message}`);
+    toast(`could not empty the trash: ${err.message}`);
   }
-  lastTrashed = [];
-  toast(`deleted ${out.purged} for good`);
-  openTrash();
 });
 
 // Every GIF here is a billable call, so this one always asks, and says how

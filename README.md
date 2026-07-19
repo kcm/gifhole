@@ -246,10 +246,14 @@ tick several with `Space` and remove them together. A single removal doesn't
 ask, because `z` takes it straight back; a batch does. *clear the library* in
 the footer moves everything to the trash at once.
 
-**The trash** (`T`, or the *Trash* button) lists what you removed, with sizes
-and when. Restore puts a GIF back under its original name, or under `name-2.gif`
-if you've since reused the name. **Deleting from the trash is the only thing in
-gifhole that destroys anything**, and it says so before it does.
+**The trash** (`T`, or via *Library*) lists what you removed, with sizes and
+when. Restore puts a GIF back under its original name, or under `name-2.gif` if
+you've since reused the name.
+
+**Deleting from the trash is the only thing in gifhole that destroys
+anything.** Those buttons arm rather than fire: the first press turns *Empty
+the trash* into *Really? No undo*, the second does it. No dialog stacks on top
+of the panel, and leaving or reopening the panel disarms it.
 
 Trashed files are plain `.gif`s in a plain folder, so you can also just go
 looking with Finder.
