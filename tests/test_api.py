@@ -236,3 +236,26 @@ def test_bulk_tag_skips_ids_that_are_gone(client):
     ]
     res = client.post("/api/gifs/tag", json={"ids": [gif_id, 9999], "add": "here"})
     assert res.json() == {"ok": True, "changed": 1, "asked": 2}
+
+
+# -- batch describe ----------------------------------------------------------
+
+
+def test_describe_batch_degrades_when_enrichment_is_unavailable(client, monkeypatch):
+    """No key must mean a clear 503, never a half-run batch."""
+    from gifhole import enrich
+
+    monkeypatch.setattr(enrich, "available", lambda: (False, "no anthropic package"))
+    gif_id = client.post("/api/gifs", files={"file": ("d.gif", make_gif(), "image/gif")}).json()[
+        "id"
+    ]
+    res = client.post("/api/gifs/describe", json={"ids": [gif_id]})
+    assert res.status_code == 503
+    assert res.json()["detail"] == "no anthropic package"
+
+
+def test_describe_batch_needs_a_selection(client, monkeypatch):
+    from gifhole import enrich
+
+    monkeypatch.setattr(enrich, "available", lambda: (True, ""))
+    assert client.post("/api/gifs/describe", json={"ids": []}).status_code == 400

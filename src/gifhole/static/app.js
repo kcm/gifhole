@@ -543,6 +543,9 @@ function paintMarks() {
   });
   $("#bulk").hidden = marked.size === 0;
   $("#bulkcount").textContent = `${marked.size} selected`;
+  const describe = $("#bulkdescribe");
+  describe.disabled = !capabilities.enrich;
+  if (!capabilities.enrich) describe.title = capabilities.enrich_reason || "needs an API key";
 }
 
 function toggleMark(id) {
@@ -1165,6 +1168,30 @@ $("#trashempty").addEventListener("click", async () => {
   openTrash();
 });
 
+// Every GIF here is a billable call, so this one always asks, and says how
+// many. Already-described GIFs are skipped server-side, so re-running over a
+// batch you have partly done costs only the remainder.
+async function describeIds(ids) {
+  if (!ids.length) return;
+  if (!capabilities.enrich) {
+    return toast(capabilities.enrich_reason || "describing needs an API key");
+  }
+  if (!confirm(`Describe ${ids.length} GIF${ids.length > 1 ? "s" : ""} with Claude? ` +
+      `That is one API call each, and costs money.`)) {
+    return;
+  }
+  try {
+    const out = await postJSON("/api/gifs/describe", { ids });
+    const skipped = out.skipped ? `, skipped ${out.skipped} already described` : "";
+    toast(out.queued ? `describing ${out.queued}${skipped}` : `nothing to do${skipped}`);
+    pollJobs();
+  } catch (err) {
+    toast(`describe failed: ${err.message}`);
+  }
+}
+
+$("#bulkdescribe").addEventListener("click", () => describeIds([...marked]));
+
 $("#bulktrash").addEventListener("click", () => {
   const ids = [...marked];
   if (ids.length > 1 && !confirm(`Move ${ids.length} GIFs to the trash?`)) return;
@@ -1235,7 +1262,8 @@ const CARD_KEYS = {
     name.focus();
     selectAll(name);
   },
-  e: (t) => t.el.querySelector(".describe").click(),
+  // Same rule as t and x: the marked set when there is one, else the current.
+  e: (t) => (marked.size ? describeIds([...marked]) : t.el.querySelector(".describe").click()),
 };
 
 addEventListener("keydown", (e) => {

@@ -164,6 +164,22 @@ stray request cannot empty it.
   every card, throwing away scroll position and focus mid-file. Tag-bar counts
   are instead adjusted locally by `bumpTag()`, which a later `load()`
   reconciles against the server's authoritative numbers.
+- **Auto-tagging is only useful if the vocabulary stays small.** `build_schema()`
+  pins `known_tags` to an `enum` of the library's existing tags, so structured
+  output makes an off-vocabulary tag impossible rather than merely discouraged;
+  `new_tags` is the small escape hatch (`MAX_NEW_TAGS`) and is the one field
+  that still needs filtering in `merge_result()`. Don't "simplify" this back to
+  a free-form string array: unconstrained, a model coins a near-synonym per GIF
+  and the tag list becomes noise. An empty vocabulary must not emit an empty
+  `enum`, which is invalid JSON Schema.
+- **The meme name belongs in the description, not the tags.** It used to be
+  split into tags, which shed junk like `distracted` and `boyfriend` into the
+  vocabulary. Descriptions are searched too, so nothing is lost.
+- **A batch stops after the first auth failure** (`auth_block` in `create_app`).
+  `enrich.available()` is deliberately permissive because it cannot see an
+  `ant auth login` profile, so the missing-key case can only surface at call
+  time; without the latch a 100-GIF batch makes 100 doomed calls. Any success
+  clears it.
 - **One tag field, two mounts.** `tagInput()` is shared by the per-card editor
   and the bulk bar deliberately: a bulk field without suggestions would be the
   fastest possible way to invent the near-duplicate tags autocomplete exists to

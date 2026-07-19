@@ -42,6 +42,7 @@ a   add GIFs      R  rescan
 g   grab a URL    ?  this list   Space v  select for bulk actions
                                  A        select all, or none
                                  t        tag everything selected
+                                 e        describe everything selected
                                  x        move selected to trash
                                  z        undo the last removal
                                  T        open the trash
@@ -109,6 +110,29 @@ export ANTHROPIC_API_KEY=...     # or use `ant auth login`
 
 Without it, everything else still works; the *describe* button just stays
 disabled.
+
+### Describing a batch
+
+Select GIFs and press **`e`** (or *Describe* in the bulk bar) to run the same
+thing over all of them. It asks first and tells you how many, because each GIF
+is one billable API call, and it skips any you've already described so
+re-running a partly-done batch only pays for the rest.
+
+**Tags stay in a controlled vocabulary.** The request pins the model's tag
+choice to the tags your library already uses, as a schema `enum`, so an
+off-vocabulary tag cannot come back at all. It may add at most two genuinely
+new tags per GIF, and only when nothing existing fits. Left unconstrained a
+model invents a fresh near-synonym for every GIF (*laughing*, *laughter*,
+*lol*, *hilarious*), which is the same shelf-splitting that autocomplete
+prevents for you, at machine speed.
+
+The vocabulary is read as each GIF is processed, not when the batch is queued,
+so a long run gets more consistent as it goes: tags the early GIFs introduce
+are on offer to the later ones.
+
+Identified meme names go into the **description** rather than the tags, since
+splitting *distracted boyfriend* into tags would shed *distracted* and
+*boyfriend* into your vocabulary. Descriptions are searchable either way.
 
 ## Downloading
 

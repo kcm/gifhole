@@ -172,3 +172,86 @@ def test_failed_ocr_is_recorded_as_a_failure_not_as_empty_text(tmp_path, monkeyp
     # Still eligible for a retry rather than silently marked as read.
     assert app.state.store.list_gifs()[0].ocr_at == 0
     assert len(app.state.store.needing_ocr()) == 1
+
+
+# -- constrained tagging -----------------------------------------------------
+
+from gifhole.enrich import MAX_NEW_TAGS, build_schema, merge_result  # noqa: E402
+
+
+def test_schema_pins_tags_to_the_existing_vocabulary():
+    """The whole point: the model cannot return an off-vocabulary known_tag."""
+    schema = build_schema(["reaction", "cat", "meme"])
+    assert schema["properties"]["known_tags"]["items"]["enum"] == ["cat", "meme", "reaction"]
+    assert schema["properties"]["new_tags"]["maxItems"] == MAX_NEW_TAGS
+
+
+def test_schema_without_a_vocabulary_has_no_empty_enum():
+    """An empty enum is invalid JSON Schema and would be rejected outright."""
+    known = build_schema([])["properties"]["known_tags"]
+    assert "enum" not in known["items"]
+    assert known["items"]["type"] == "string"
+
+
+def test_merge_keeps_vocabulary_tags_and_genuinely_new_ones():
+    out = merge_result(
+        {
+            "description": "a cat knocks a glass off a table",
+            "meme_name": "",
+            "known_tags": ["cat", "reaction"],
+            "new_tags": ["mischief"],
+        },
+        ["cat", "reaction"],
+    )
+    assert out["tags"] == ["cat", "reaction", "mischief"]
+
+
+def test_merge_drops_new_tags_that_duplicate_the_vocabulary():
+    """A "new" tag that already exists is not new; it must not appear twice."""
+    out = merge_result(
+        {"description": "d", "meme_name": "", "known_tags": ["cat"], "new_tags": ["Cat", "cat"]},
+        ["cat"],
+    )
+    assert out["tags"] == ["cat"]
+
+
+def test_merge_drops_multi_word_tags():
+    """Only new_tags is unconstrained, so it is the one place this can arrive."""
+    out = merge_result(
+        {"description": "d", "meme_name": "", "known_tags": [], "new_tags": ["very annoyed"]},
+        [],
+    )
+    assert out["tags"] == []
+
+
+def test_meme_name_goes_in_the_description_not_the_tags():
+    """Splitting it into tags used to shed junk like "distracted"/"boyfriend"."""
+    out = merge_result(
+        {
+            "description": "a man looks back at another woman",
+            "meme_name": "distracted boyfriend",
+            "known_tags": ["reaction"],
+            "new_tags": [],
+        },
+        ["reaction"],
+    )
+    assert out["tags"] == ["reaction"]
+    assert out["description"].startswith("distracted boyfriend: ")
+
+
+def test_meme_name_is_not_repeated_when_already_in_the_description():
+    out = merge_result(
+        {"description": "This Is Fine: a dog in a fire", "meme_name": "this is fine",
+         "known_tags": [], "new_tags": []},
+        [],
+    )
+    assert out["description"] == "This Is Fine: a dog in a fire"
+
+
+def test_null_meme_name_does_not_crash():
+    """The model returns null, not "", when it recognises nothing."""
+    out = merge_result(
+        {"description": "d", "meme_name": None, "known_tags": [], "new_tags": []}, []
+    )
+    assert out["meme_name"] == ""
+    assert out["description"] == "d"

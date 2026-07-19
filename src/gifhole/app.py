@@ -329,6 +329,42 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
         store.bump_copies(gif_id)
         return JSONResponse({"ok": True, "filename": gif.filename})
 
+    # `enrich.available()` stays permissive on purpose: it cannot see an
+    # `ant auth login` profile, so refusing on a missing env var would wrongly
+    # disable the feature for people who have one. The cost of that is a batch
+    # discovering the problem per GIF. So the first auth failure latches here,
+    # and the rest of the queue fails instantly instead of making 99 more calls
+    # that cannot succeed. Any later success clears it.
+    auth_block: dict[str, str | None] = {"why": None}
+
+    def queue_enrich(gif) -> None:
+        """Describe one GIF in the background, tagged from the live vocabulary.
+
+        The vocabulary is read when the job runs, not when it is queued, so a
+        batch of 100 gets steadily more consistent: tags the earlier GIFs
+        introduced are on offer to the later ones.
+        """
+        from gifhole import enrich
+
+        def run(job):
+            if auth_block["why"]:
+                raise enrich.EnrichError(auth_block["why"])
+            vocabulary = [tag for tag, _ in store.all_tags()]
+            try:
+                result = enrich.describe_gif(store.gifs_dir / gif.filename, vocabulary=vocabulary)
+            except enrich.EnrichError as exc:
+                if any(w in str(exc).lower() for w in ("authentication", "api_key", "api key")):
+                    auth_block["why"] = (
+                        "no API key. Set ANTHROPIC_API_KEY or run `ant auth login`, "
+                        "then try again"
+                    )
+                raise
+            auth_block["why"] = None
+            store.set_enrichment(gif.id, result["description"], " ".join(result["tags"]))
+            return result["meme_name"] or result["description"][:60] or "described"
+
+        jobs.submit("describe", gif.filename, run)
+
     @app.post("/api/gifs/{gif_id}/enrich")
     def run_enrich(gif_id: int) -> JSONResponse:
         """Describe a GIF with Claude. Opt-in, per GIF, costs money."""
@@ -340,14 +376,31 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
         ok, why = enrich.available()
         if not ok:
             raise HTTPException(503, why)
+        queue_enrich(gif)
+        return JSONResponse({"ok": True, "queued": 1}, status_code=202)
 
-        def run(job):
-            result = enrich.describe_gif(store.gifs_dir / gif.filename)
-            store.set_enrichment(gif.id, result["description"], " ".join(result["tags"]))
-            return result["meme_name"] or result["description"][:60]
+    @app.post("/api/gifs/describe")
+    def describe_many(payload: dict) -> JSONResponse:
+        """Describe a batch. Every GIF is a billable API call, so the caller
+        has to name them: there is no "describe everything" shortcut here."""
+        from gifhole import enrich
 
-        job = jobs.submit("enrich", gif.filename, run)
-        return JSONResponse(job.as_dict(), status_code=202)
+        ok, why = enrich.available()
+        if not ok:
+            raise HTTPException(503, why)
+        ids = [i for i in (payload.get("ids") or []) if isinstance(i, int)]
+        if not ids:
+            raise HTTPException(400, "nothing selected")
+        gifs = [g for g in (store.get(i) for i in ids) if g is not None]
+        # Skipping already-described GIFs by default makes re-running a batch
+        # cheap instead of paying twice for the same answer.
+        if not payload.get("redo"):
+            gifs = [g for g in gifs if not g.enriched_at]
+        for gif in gifs:
+            queue_enrich(gif)
+        return JSONResponse(
+            {"ok": True, "queued": len(gifs), "skipped": len(ids) - len(gifs)}, status_code=202
+        )
 
     # -- jobs ----------------------------------------------------------------
 
