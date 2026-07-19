@@ -150,6 +150,11 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
             probe.unlink(missing_ok=True)
         return [{**gif.as_dict(), "match": kind} for gif, kind in found]
 
+    @app.get("/api/library")
+    def library_stats() -> JSONResponse:
+        """Counts for the library panel, including what each scope would cover."""
+        return JSONResponse({"stats": store.stats(), "scopes": list(store.SCOPES)})
+
     @app.get("/api/duplicates")
     def list_duplicates() -> JSONResponse:
         """Duplicates already in the library, for a collection built before this."""
@@ -399,8 +404,15 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
                     )
                 raise
             auth_block["why"] = None
+            before = set(store.get(gif.id).tags if store.get(gif.id) else [])
             store.set_enrichment(gif.id, result["description"], " ".join(result["tags"]))
-            return result["meme_name"] or result["description"][:60] or "described"
+            after = store.get(gif.id)
+            added = [t for t in (after.tags if after else []) if t not in before]
+            # Say what changed. A constrained vocabulary often picks tags the
+            # GIF already had, which is correct but looks like nothing
+            # happened unless the job says so.
+            note = f"+{len(added)} tags: {' '.join(added)}" if added else "no new tags"
+            return f"{note} · {result['description'][:60]}"
 
         jobs.submit("describe", gif.filename, run)
 
@@ -427,18 +439,29 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
         ok, why = enrich.available()
         if not ok:
             raise HTTPException(503, why)
-        ids = [i for i in (payload.get("ids") or []) if isinstance(i, int)]
-        if not ids:
-            raise HTTPException(400, "nothing selected")
-        gifs = [g for g in (store.get(i) for i in ids) if g is not None]
-        # Skipping already-described GIFs by default makes re-running a batch
-        # cheap instead of paying twice for the same answer.
-        if not payload.get("redo"):
-            gifs = [g for g in gifs if not g.enriched_at]
+        scope = payload.get("scope")
+        if scope:
+            # A library-wide run. The scope already says what to include, so it
+            # is not filtered again by enriched_at: "all" means all.
+            try:
+                gifs = store.in_scope(scope)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+        else:
+            ids = [i for i in (payload.get("ids") or []) if isinstance(i, int)]
+            if not ids:
+                raise HTTPException(400, "nothing selected")
+            gifs = [g for g in (store.get(i) for i in ids) if g is not None]
+            # Skipping already-described GIFs by default makes re-running a
+            # batch cheap instead of paying twice for the same answer.
+            if not payload.get("redo"):
+                gifs = [g for g in gifs if not g.enriched_at]
         for gif in gifs:
             queue_enrich(gif)
+        asked = len(store.list_gifs()) if scope else len(payload.get("ids") or [])
         return JSONResponse(
-            {"ok": True, "queued": len(gifs), "skipped": len(ids) - len(gifs)}, status_code=202
+            {"ok": True, "queued": len(gifs), "skipped": max(0, asked - len(gifs))},
+            status_code=202,
         )
 
     # -- jobs ----------------------------------------------------------------

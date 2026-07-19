@@ -1228,3 +1228,47 @@ footer select {
 .dupeactions button {
   white-space: nowrap;
 }
+
+/* -- library panel --------------------------------------------------------- */
+
+.libsection {
+  border-top: 1px solid var(--rule);
+  padding: 12px 0 4px;
+}
+
+.libsection h3 {
+  margin: 0 0 4px;
+  font: inherit;
+  font-size: 12px;
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  color: var(--panel-muted);
+}
+
+.libnote {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--panel-muted);
+}
+
+.librow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.librow button {
+  white-space: nowrap;
+}
+
+/* The number is the point of the whole section: it is what the run will cost. */
+.libcount {
+  font-size: 12px;
+  color: var(--panel-ink);
+}
+
+button.danger {
+  color: var(--link-hot);
+}

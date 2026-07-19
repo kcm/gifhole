@@ -214,6 +214,28 @@ gifhole --root DIR    library location   (default ~/.gifhole)
        --reload      restart on source changes (development)
 ```
 
+## The library panel
+
+*Library* in the toolbar collects everything that acts on the whole collection
+rather than one GIF, so a costly action and a destructive one are not sitting a
+click away from everyday buttons.
+
+**Describe with Claude** is the expensive one, so it is scoped and counted
+before it runs. Pick *missing tags or description*, *missing a description*,
+*missing tags*, or *everything, redo what is done*; the panel shows exactly how
+many GIFs that covers, and the confirm repeats the number, because it is one
+API call each.
+
+Scoping is the point: on a library you have been adding to for months, the
+useful run is usually "the ones I never got round to", not all of it. Tags stay
+in your existing vocabulary either way, so a big run makes the library more
+consistent rather than noisier. Describing 8 test GIFs added exactly two tags
+across all of them.
+
+**Maintenance** (rescan the folder, find duplicates, open the trash) is local
+and costs nothing. **Danger** holds *clear the library*, which moves everything
+to the trash and so is still undoable.
+
 ## Removing things
 
 Deleting is always a two-step affair, because the first step is undoable and

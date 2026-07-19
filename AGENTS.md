@@ -190,6 +190,15 @@ stray request cannot empty it.
 - **A duplicate is reported, never rejected.** `/api/gifs` answers 200 with
   `{duplicate, matches}` and writes nothing; only `force` adds. Keep that shape:
   only the user can tell a re-encode from a different cut of the same scene.
+- **Library-wide actions live in one panel** (`#library`), not scattered across
+  the toolbar and footer. Anything costly or destructive belongs there, behind a
+  count. `Rescan`, `Trash` and `clear the library` still exist as
+  `.visually-hidden` buttons because the panel and the keyboard shortcuts both
+  click them; don't delete them, and don't switch them to `display:none`.
+- **Scoped runs are counted before they run.** `store.in_scope()` and
+  `store.stats()` share one vocabulary of scope names so the number in the
+  panel is exactly what will execute. A scoped describe deliberately ignores
+  `enriched_at`: "all" means all, and that is how a redo is requested.
 - **Auto-tagging is only useful if the vocabulary stays small.** `build_schema()`
   pins `known_tags` to an `enum` of the library's existing tags, so structured
   output makes an off-vocabulary tag impossible rather than merely discouraged;

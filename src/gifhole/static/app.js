@@ -703,6 +703,7 @@ const closeDupes = () => {
 };
 
 function showDupes(items) {
+  resetDupePanel();
   pendingDupes = items;
   $("#dupecount").textContent =
     items.length === 1 ? "1 looks familiar" : `${items.length} look familiar`;
@@ -761,6 +762,56 @@ function showDupes(items) {
     }),
   );
   dupePanel.hidden = false;
+}
+
+// Duplicates already sitting in the library, as opposed to one arriving. Same
+// panel, different shape: every member is a real GIF, so each can be trashed
+// (recoverably) rather than accepted or skipped.
+function showExistingDupes(groups) {
+  pendingDupes = [];
+  $("#dupeaddall").hidden = true;
+  $("#dupeskipall").textContent = "Done";
+  document.querySelector("#dupes h2").textContent = "duplicates in your library";
+  $("#dupecount").textContent =
+    groups.length === 1 ? "1 group" : `${groups.length} groups`;
+
+  $("#dupelist").replaceChildren(
+    ...groups.map((group) => {
+      const row = document.createElement("div");
+      row.className = "duperow";
+      const matches = document.createElement("div");
+      matches.className = "dupematches";
+      for (const gif of group) {
+        const fig = document.createElement("figure");
+        fig.className = "dupefig";
+        const img = document.createElement("img");
+        img.src = gif.url;
+        const cap = document.createElement("figcaption");
+        cap.textContent = `${gif.filename} · ${gif.width}x${gif.height}`;
+        const bin = document.createElement("button");
+        bin.className = "linkish danger";
+        bin.textContent = "trash this";
+        bin.addEventListener("click", async () => {
+          await trashIds([gif.id]);
+          fig.remove();
+          if (matches.querySelectorAll(".dupefig").length < 2) row.remove();
+          if (!$("#dupelist").children.length) closeDupes();
+        });
+        fig.append(img, cap, bin);
+        matches.append(fig);
+      }
+      row.append(matches);
+      return row;
+    }),
+  );
+  dupePanel.hidden = false;
+}
+
+// Restores the panel to its arriving-duplicate shape, since the two share it.
+function resetDupePanel() {
+  $("#dupeaddall").hidden = false;
+  $("#dupeskipall").textContent = "Skip all";
+  document.querySelector("#dupes h2").textContent = "already have these?";
 }
 
 $("#dupeskipall").addEventListener("click", closeDupes);
@@ -1180,6 +1231,92 @@ const isTyping = (node) =>
   node instanceof HTMLElement &&
   (node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.isContentEditable);
 
+// ------------------------------------------------------------ library panel
+
+// One place for the things that act on the whole library rather than on a
+// GIF: describing in bulk, rescanning, duplicates, the trash, and clearing.
+// They were scattered across the toolbar and the footer, which put a costly
+// action and a destructive one a click apart from everyday buttons.
+const libPanel = $("#library");
+const libScope = $("#libscope");
+const closeLibrary = () => (libPanel.hidden = true);
+let libStats = null;
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function paintScopeCount() {
+  const n = libStats ? (libStats[libScope.value] ?? 0) : 0;
+  $("#libscopecount").textContent = n ? `${plural(n, "GIF")} to describe` : "nothing to do";
+  // Disabled on nothing-to-do as well as no-key: a live button that would make
+  // zero calls is the same lie as one whose calls all fail.
+  $("#libdescribe").disabled = !n || !capabilities.enrich;
+  $("#libdescribe").title = capabilities.enrich
+    ? ""
+    : capabilities.enrich_reason || "needs an API key";
+}
+
+async function openLibrary() {
+  try {
+    const body = await (await fetch("/api/library")).json();
+    libStats = body.stats;
+  } catch {
+    return toast("could not read the library. Is the server running the current code?");
+  }
+  const s = libStats;
+  const mb = s.bytes > 1048576 ? `${(s.bytes / 1048576).toFixed(0)} MB` : `${Math.round(s.bytes / 1024)} KB`;
+  $("#libsummary").textContent =
+    `${plural(s.total, "GIF")} · ${mb} · ${plural(s.tags, "tag")} · ` +
+    `${s.described} described · ${s.never_ocr} never read for text`;
+  paintScopeCount();
+  libPanel.hidden = false;
+}
+
+libScope.addEventListener("change", paintScopeCount);
+$("#librarybtn").addEventListener("click", openLibrary);
+$("#libclose").addEventListener("click", closeLibrary);
+
+$("#libdescribe").addEventListener("click", async () => {
+  const scope = libScope.value;
+  const n = libStats?.[scope] ?? 0;
+  if (!n) return;
+  if (!confirm(`Describe ${plural(n, "GIF")} with Claude? That is ${n} API calls, and costs money.`)) {
+    return;
+  }
+  closeLibrary();
+  try {
+    const out = await postJSON("/api/gifs/describe", { scope });
+    toast(`describing ${out.queued} · watch the job strip`);
+    pollJobs();
+  } catch (err) {
+    toast(`describe failed: ${err.message}`);
+  }
+});
+
+$("#librescan").addEventListener("click", () => {
+  closeLibrary();
+  $("#rescan").click();
+});
+$("#libtrash").addEventListener("click", () => {
+  closeLibrary();
+  openTrash();
+});
+$("#libclear").addEventListener("click", () => {
+  closeLibrary();
+  $("#clearall").click();
+});
+$("#libdupes").addEventListener("click", async () => {
+  toast("looking for duplicates…");
+  let groups;
+  try {
+    groups = (await (await fetch("/api/duplicates")).json()).groups;
+  } catch {
+    return toast("could not check for duplicates");
+  }
+  closeLibrary();
+  if (!groups.length) return toast("no duplicates found");
+  showExistingDupes(groups);
+});
+
 // ---------------------------------------------------------------- the trash
 
 const trashPanel = $("#trash");
@@ -1405,6 +1542,7 @@ addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (!help.hidden) return closeHelp();
     if (!dupePanel.hidden) return closeDupes();
+    if (!libPanel.hidden) return closeLibrary();
     if (!trashPanel.hidden) return closeTrash();
     if (!picker.hidden) return closePicker();
     if (typing) return; // fields handle their own Escape

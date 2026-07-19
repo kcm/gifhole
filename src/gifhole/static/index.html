@@ -62,8 +62,11 @@
     </select>
     <button id="add" class="primary">Add GIFs</button>
     <button id="grab" title="download from a GIF link or scrape a page">Grab URL</button>
-    <button id="rescan" title="pick up files added to the folder by hand">Rescan</button>
-    <button id="trashbtn" title="restore or permanently delete removed GIFs">Trash</button>
+    <button id="librarybtn" title="describe, rescan, duplicates, trash">Library</button>
+    <!-- Kept in the markup, out of the toolbar: the library panel drives these,
+         and the keyboard shortcuts still click them. -->
+    <button id="rescan" class="visually-hidden">Rescan</button>
+    <button id="trashbtn" class="visually-hidden">Trash</button>
     <input id="graburl" type="url" placeholder="paste a GIF or page URL, Enter to fetch" hidden>
     <!-- Visually hidden rather than display:none: some browsers won't open a
          file picker for a display:none input. -->
@@ -104,6 +107,55 @@
   <button id="bulkdescribe" title="describe with Claude (one API call each)">Describe</button>
   <button id="bulktrash">Move to trash</button>
   <button id="bulkclear">Deselect</button>
+</div>
+
+<div id="library" class="trash" hidden>
+  <div class="trashbox">
+    <div class="trashhead">
+      <h2>library</h2>
+      <span id="libsummary" class="trashsummary"></span>
+      <span class="picker-spacer"></span>
+      <button id="libclose">Close</button>
+    </div>
+
+    <div class="libsection">
+      <h3>Describe with Claude</h3>
+      <p class="libnote">
+        One API call per GIF, so this costs money. Pick what to cover; the count
+        is what will actually run.
+      </p>
+      <div class="librow">
+        <select id="libscope">
+          <option value="missing_either">missing tags or description</option>
+          <option value="missing_description">missing a description</option>
+          <option value="missing_tags">missing tags</option>
+          <option value="all">everything, redo what is done</option>
+        </select>
+        <button id="libdescribe" class="primary">Describe</button>
+        <span id="libscopecount" class="libcount"></span>
+      </div>
+    </div>
+
+    <div class="libsection">
+      <h3>Maintenance</h3>
+      <p class="libnote">Local only. None of these cost anything or call out.</p>
+      <div class="librow">
+        <button id="librescan">Rescan folder</button>
+        <button id="libdupes">Find duplicates</button>
+        <button id="libtrash">Open trash</button>
+      </div>
+    </div>
+
+    <div class="libsection">
+      <h3>Danger</h3>
+      <p class="libnote">
+        Clearing moves everything to the trash, so it can be undone from there.
+      </p>
+      <div class="librow">
+        <button id="libclear" class="danger">Clear the library</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div id="dupes" class="trash" hidden>
@@ -207,9 +259,7 @@
     <option value="linkedin">linkedin</option>
   </select>
   <span class="footspacer"></span>
-  <!-- Deliberately out of the way: rare, and it empties the wall. It moves
-       everything to the trash rather than deleting, so it is recoverable. -->
-  <button id="clearall" class="linkish danger">clear the library</button>
+  <button id="clearall" class="visually-hidden">clear the library</button>
 </footer>
 
 <script src="/static/app.js"></script>

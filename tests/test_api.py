@@ -363,3 +363,49 @@ def test_editing_the_description_leaves_tags_and_title_alone(client):
     gif = client.get("/api/gifs").json()["gifs"][0]
     assert gif["title"] == "Keeper"
     assert gif["tags"] == ["cat", "reaction"]
+
+
+# -- library panel -----------------------------------------------------------
+
+
+def test_library_stats_count_each_scope(client):
+    a = _add(client, "a.gif")
+    b = _add(client, "b.gif")
+    _add(client, "c.gif")
+    client.patch(f"/api/gifs/{a}", json={"tags": "one"})
+    client.patch(f"/api/gifs/{b}", json={"description": "written"})
+    stats = client.get("/api/library").json()["stats"]
+    assert stats["total"] == 3
+    assert stats["missing_tags"] == 2
+    assert stats["missing_description"] == 2
+    # Only the GIF with neither is missing both; the other two lack one each.
+    assert stats["missing_either"] == 3
+    assert stats["all"] == 3
+
+
+def test_describe_by_scope_queues_only_that_scope(client, monkeypatch):
+    from gifhole import enrich
+
+    monkeypatch.setattr(enrich, "available", lambda: (True, ""))
+    tagged = _add(client, "tagged.gif")
+    _add(client, "bare.gif")
+    client.patch(f"/api/gifs/{tagged}", json={"tags": "has"})
+    res = client.post("/api/gifs/describe", json={"scope": "missing_tags"})
+    assert res.json()["queued"] == 1
+
+
+def test_describe_scope_all_covers_everything(client, monkeypatch):
+    from gifhole import enrich
+
+    monkeypatch.setattr(enrich, "available", lambda: (True, ""))
+    for i in range(3):
+        _add(client, f"s{i}.gif")
+    assert client.post("/api/gifs/describe", json={"scope": "all"}).json()["queued"] == 3
+
+
+def test_an_unknown_scope_is_refused(client, monkeypatch):
+    from gifhole import enrich
+
+    monkeypatch.setattr(enrich, "available", lambda: (True, ""))
+    _add(client, "z.gif")
+    assert client.post("/api/gifs/describe", json={"scope": "everything"}).status_code == 400

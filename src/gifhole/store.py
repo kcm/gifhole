@@ -322,6 +322,37 @@ class Store:
                 groups.append(group)
         return groups
 
+    # What a library-wide job should touch. Named rather than boolean flags so
+    # the UI can show a count for exactly what it is about to spend money on.
+    SCOPES = ("missing_description", "missing_tags", "missing_either", "all")
+
+    def in_scope(self, scope: str) -> list[Gif]:
+        gifs = self.list_gifs()
+        if scope == "all":
+            return gifs
+        if scope == "missing_description":
+            return [g for g in gifs if not g.description.strip()]
+        if scope == "missing_tags":
+            return [g for g in gifs if not g.tags]
+        if scope == "missing_either":
+            return [g for g in gifs if not g.description.strip() or not g.tags]
+        raise ValueError(f"unknown scope: {scope}")
+
+    def stats(self) -> dict:
+        """Counts behind the library panel, so a run can be sized before it starts."""
+        gifs = self.list_gifs()
+        return {
+            "total": len(gifs),
+            "missing_description": sum(1 for g in gifs if not g.description.strip()),
+            "missing_tags": sum(1 for g in gifs if not g.tags),
+            "missing_either": sum(1 for g in gifs if not g.description.strip() or not g.tags),
+            "all": len(gifs),
+            "never_ocr": sum(1 for g in gifs if not g.ocr_at),
+            "described": sum(1 for g in gifs if g.enriched_at),
+            "tags": len(self.all_tags()),
+            "bytes": sum(g.bytes for g in gifs),
+        }
+
     def retag(
         self, ids: list[int], add: list[str] | tuple[str, ...] = (), remove: list[str] = ()
     ) -> list[int]:
