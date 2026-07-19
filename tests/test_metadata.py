@@ -525,6 +525,49 @@ def test_frame_sampling_still_skips_the_title_card():
 # -- port handling -----------------------------------------------------------
 
 
+def test_an_explicit_port_that_is_taken_refuses_to_start():
+    """Asking for a port means that port or nothing: serving somewhere else
+    would leave whatever pointed at it pointing at a stranger."""
+    import socket as sock
+
+    from gifhole.cli import resolve_port
+
+    with sock.socket(sock.AF_INET, sock.SOCK_STREAM) as held:
+        held.bind(("127.0.0.1", 0))
+        held.listen(1)
+        taken = held.getsockname()[1]
+        with pytest.raises(SystemExit):
+            resolve_port("127.0.0.1", taken)
+
+
+def test_the_default_port_moves_out_of_the_way_when_taken(monkeypatch):
+    """Not asking means "just work", so a busy default is not an error."""
+    import socket as sock
+
+    from gifhole import cli
+
+    with sock.socket(sock.AF_INET, sock.SOCK_STREAM) as held:
+        held.bind(("127.0.0.1", 0))
+        held.listen(1)
+        taken = held.getsockname()[1]
+        monkeypatch.setattr(cli, "DEFAULT_PORT", taken)
+        chosen = cli.resolve_port("127.0.0.1", None)
+    assert chosen != taken
+    assert cli.port_in_use("127.0.0.1", chosen) is False
+
+
+def test_the_default_port_is_used_when_it_is_free(monkeypatch):
+    import socket as sock
+
+    from gifhole import cli
+
+    with sock.socket(sock.AF_INET, sock.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        free = probe.getsockname()[1]
+    monkeypatch.setattr(cli, "DEFAULT_PORT", free)
+    assert cli.resolve_port("127.0.0.1", None) == free
+
+
 def test_a_taken_port_is_detected_before_anything_claims_to_serve():
     """It used to print "serving:", open a browser and exit 0 after uvicorn had
     already failed to bind, so a supervisor saw a clean start."""

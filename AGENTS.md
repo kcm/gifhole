@@ -202,6 +202,11 @@ in one place, which is the property that makes the simple thing keep working.
 
 ## Gotchas
 
+- **Startup output must be flushed.** stdout is block-buffered when it is a
+  pipe rather than a terminal, which is exactly the case under `brew services`
+  and Docker, so an unflushed "serving on 8778 instead" is invisible where it
+  is needed most.
+
 - **`[hidden]` needs the `!important` reset in `style.css`.** Author `display`
   rules outrank the UA style for the `hidden` attribute, so a `.drop`/`.toast`
   element will keep painting while `el.hidden === true`. Reading `.hidden` in

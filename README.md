@@ -275,8 +275,16 @@ gifhole --root DIR    library location   (default ~/.gifhole)
        --token TOKEN require a token on every request (or GIFHOLE_TOKEN)
 ```
 
-If the port is already taken, gifhole says so, suggests a free one, and exits
-non-zero rather than printing a URL that does not work.
+Ports behave differently depending on whether you asked for one. **Naming a
+port with `--port` means that port or nothing**: if it is taken, gifhole says
+so and exits non-zero rather than quietly serving somewhere else, because
+whatever was pointed at it would now be pointing at a stranger. **Saying
+nothing means just work**: if 8777 is busy it moves to the next free port and
+tells you which.
+
+It walks upward rather than picking at random, so the port stays the same
+across restarts. That matters more than it sounds: the saved bookmarklet and
+the token cookie are both tied to the origin.
 
 ## Running it on a server
 

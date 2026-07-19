@@ -18,8 +18,13 @@ from gifhole.app import create_app, default_root
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 
-# How far to look for a free port when suggesting one.
-PORT_SEARCH = 20
+DEFAULT_PORT = 8777
+
+# How far to look for a free port. Sequential rather than random on purpose:
+# the port ends up in a saved bookmarklet and in the token cookie's origin, so
+# a port that stays the same across restarts is worth more than an unpredictable
+# one. With 8777 held by something permanent you land on 8778 every time.
+PORT_SEARCH = 50
 
 
 def port_in_use(host: str, port: int) -> bool:
@@ -45,6 +50,43 @@ def next_free_port(host: str, start: int) -> int | None:
     return None
 
 
+def resolve_port(host: str, requested: int | None) -> int:
+    """Decide which port to serve on, before anything claims to be serving.
+
+    Asking for a port explicitly means that port or nothing: silently serving
+    somewhere else would be worse than failing, because whatever was pointed at
+    the old one is now pointed at a stranger. Not asking means the default, and
+    moving off it if it is busy, since the common case is a second gifhole or
+    an unrelated service on 8777 and the user does not care which port they get.
+
+    This all happens before anything is printed or opened. It used to bind
+    late, so a failure still printed "serving:", opened a browser at a dead
+    URL, and exited 0.
+    """
+    if requested is not None:
+        if port_in_use(host, requested):
+            print(f"gifhole: {host}:{requested} is already in use", file=sys.stderr, flush=True)
+            spare = next_free_port(host, requested)
+            if spare:
+                print(f"         free: {spare}. Omit --port to move automatically", file=sys.stderr)
+            raise SystemExit(1)
+        return requested
+
+    if not port_in_use(host, DEFAULT_PORT):
+        return DEFAULT_PORT
+
+    spare = next_free_port(host, DEFAULT_PORT)
+    if spare is None:
+        print(
+            f"gifhole: {DEFAULT_PORT} is in use and nothing is free within "
+            f"{PORT_SEARCH} of it; pick one with --port",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    print(f"gifhole: {DEFAULT_PORT} is in use, serving on {spare} instead", flush=True)
+    return spare
+
+
 def move(args) -> int:
     """Relocate the library. Files only; see store.move_library."""
     try:
@@ -66,7 +108,15 @@ def move(args) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="gifhole", description="local GIF library")
     parser.add_argument("--root", type=Path, default=default_root(), help="library directory")
-    parser.add_argument("--port", type=int, default=8777)
+    # No default here, so "not given" is distinguishable from "asked for 8777".
+    # Asking for a port means that port or nothing; not asking means just work.
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help=f"port to serve on (default {DEFAULT_PORT}, "
+        "moving to the next free one if that is taken)",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--no-open", action="store_true", help="do not open a browser")
     parser.add_argument(
@@ -88,20 +138,10 @@ def main() -> None:
     if args.command == "move":
         raise SystemExit(move(args))
 
-    # Before anything claims to be serving. This used to print "serving:" and
-    # open a browser after uvicorn had already failed to bind, and exit 0, so a
-    # supervisor saw a clean start and the user saw a dead tab.
-    if port_in_use(args.host, args.port):
-        print(f"gifhole: {args.host}:{args.port} is already in use", file=sys.stderr)
-        spare = next_free_port(args.host, args.port)
-        if spare:
-            print(f"         try: gifhole --port {spare}", file=sys.stderr)
-        else:
-            print("         nothing free nearby; pick a port with --port", file=sys.stderr)
-        raise SystemExit(1)
+    port = resolve_port(args.host, args.port)
 
-    url = f"http://{args.host}:{args.port}/"
-    print(f"gifhole  library: {args.root / 'gifs'}\n        serving: {url}")
+    url = f"http://{args.host}:{port}/"
+    print(f"gifhole  library: {args.root / 'gifs'}\n        serving: {url}", flush=True)
     if not args.no_open:
         threading.Timer(0.8, webbrowser.open, (url,)).start()
 
@@ -110,9 +150,9 @@ def main() -> None:
         # arguments, so the token travels the same way --root does.
         os.environ["GIFHOLE_TOKEN"] = args.token
     if _configured_token(args.token):
-        print(f"        access: token required, add ?token=... to {url} once")
+        print(f"        access: token required, add ?token=... to {url} once", flush=True)
 
-    common = {"host": args.host, "port": args.port, "log_level": "warning"}
+    common = {"host": args.host, "port": port, "log_level": "warning"}
     if not args.reload:
         uvicorn.run(create_app(args.root, token=args.token or None), **common)
         return
