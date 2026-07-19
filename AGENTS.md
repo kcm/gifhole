@@ -111,6 +111,14 @@ stray request cannot empty it.
   `refuse_cross_site_writes`, correctly. Opening `/?add=<url>` is a plain GET
   and needs no exception carved into that middleware; don't add one. `?add=` is
   stripped from the address bar on arrival so a refresh cannot re-import.
+- **Fail closed, and refuse rather than warn.** If access control is asked for
+  and cannot be honoured, stop the process: `create_app` raises and the CLI
+  exits before printing, opening a browser, or claiming a port. A warning about
+  serving everything is not a substitute for not serving everything.
+- **Every GET route must be classified** in `tests/test_contracts.py`, as safe
+  to expose under `--public-reads` or as writer-only. `WRITER_ONLY_PATHS` is
+  hand-maintained, so without that test a new expensive GET would default to
+  public and nothing would notice. It caught `/openapi.json` on its first run.
 - **`WRITER_ONLY_PATHS` is the one exception to the method rule, and it is not
   optional.** `/api/preview` is a `GET` that makes the server fetch a
   caller-chosen URL; public reads would make it an open proxy on the host's

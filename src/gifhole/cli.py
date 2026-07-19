@@ -150,6 +150,22 @@ def main() -> None:
     if args.command == "move":
         raise SystemExit(move(args))
 
+    # Every reason to refuse comes first: nothing is printed, no browser is
+    # armed, and no port is claimed until the configuration is known to be
+    # serviceable. Announcing and then failing is how the port bug read, and
+    # this had grown the same shape.
+    try:
+        create_app(
+            args.root,
+            auto_ocr=False,
+            token=args.token or None,
+            read_token=args.read_token or None,
+            public_reads=args.public_reads or None,
+        )
+    except ValueError as exc:
+        print(f"gifhole: {exc}", file=sys.stderr, flush=True)
+        raise SystemExit(1) from exc
+
     port = resolve_port(args.host, args.port)
 
     url = f"http://{args.host}:{port}/"

@@ -85,16 +85,21 @@ def create_app(
     token = configured_token(token)
     read_token = configured_read_token(read_token)
     public_reads = configured_public_reads(public_reads)
-    # A read token on its own would be worse than none: writes would still be
-    # wide open while the config looked like it said otherwise.
+    # Asking for access control and not getting it must stop the process, not
+    # log about it. Both of these once warned and carried on serving
+    # everything, which is the exact shape of a fail-open: the operator
+    # believed they had restricted access, and the only evidence otherwise was
+    # a line in a log nobody reads.
     if read_token and not token:
-        log.warning("GIFHOLE_READ_TOKEN ignored: it does nothing without GIFHOLE_TOKEN")
-        read_token = ""
+        raise ValueError(
+            "a read token needs a write token as well, or writes stay open to "
+            "everyone. Set GIFHOLE_TOKEN (or --token)."
+        )
     if public_reads and not token:
-        # Without a write token this would not be "public reads", it would be
-        # public everything, which is what no configuration already means.
-        log.warning("public reads ignored: without GIFHOLE_TOKEN, writes are open too")
-        public_reads = False
+        raise ValueError(
+            "public reads needs a write token as well, or writes are public too. "
+            "Set GIFHOLE_TOKEN (or --token)."
+        )
     if public_reads and read_token:
         log.warning("GIFHOLE_READ_TOKEN is redundant while reads are public")
     store = Store(root or default_root())
@@ -105,7 +110,11 @@ def create_app(
     staging_dir = store.root / ".staging"
     shutil.rmtree(staging_dir, ignore_errors=True)
 
-    app = FastAPI(title="gifhole", docs_url=None, redoc_url=None)
+    # No docs, and no schema either. The interactive docs were already off, but
+    # openapi.json stayed on and would have been served to anyone under
+    # --public-reads, handing out a map of every write route. There is no
+    # audience for it here: the API has exactly one client, which ships with it.
+    app = FastAPI(title="gifhole", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.jobs = jobs
 

@@ -95,3 +95,57 @@ def test_every_class_the_js_toggles_is_styled():
     toggled = set(re.findall(r"""classList\.(?:add|toggle)\(\s*["']([a-z-]+)["']""", JS))
     missing = sorted(c for c in toggled if f".{c}" not in CSS)
     assert not missing, f"classes toggled in app.js but absent from style.css: {missing}"
+
+
+# -- fail closed -------------------------------------------------------------
+
+# Every GET route, classified deliberately. Read routes are safe to expose with
+# --public-reads; writer-only ones are not, because they cost something: an
+# outbound request, money, or the host's bandwidth.
+#
+# This exists because WRITER_ONLY_PATHS is hand-maintained, so a new expensive
+# GET would otherwise default to public and nothing would notice. Adding a route
+# breaks this test on purpose: decide which side it belongs on.
+PUBLIC_READ_ROUTES = {
+    "/",
+    "/gifs/{filename}",
+    "/api/gifs",
+    "/api/jobs",
+    "/api/library",
+    "/api/trash",
+    "/api/duplicates",
+}
+WRITER_ONLY_READ_ROUTES = {
+    # Fetches a URL the caller chooses: public would mean an open proxy.
+    "/api/preview",
+}
+
+
+def test_every_read_route_is_classified():
+    import tempfile
+
+    from gifhole.app import create_app, needs_a_writer
+
+    with tempfile.TemporaryDirectory() as root:
+        app = create_app(root, auto_ocr=False)
+        gets = {
+            route.path
+            for route in app.routes
+            if "GET" in (getattr(route, "methods", None) or set())
+            and not route.path.startswith("/static")
+        }
+
+    classified = PUBLIC_READ_ROUTES | WRITER_ONLY_READ_ROUTES
+    unclassified = sorted(gets - classified)
+    assert not unclassified, (
+        f"new GET route(s) {unclassified}: add to PUBLIC_READ_ROUTES if safe to expose "
+        "with --public-reads, or to WRITER_ONLY_PATHS in app.py if it costs anything"
+    )
+    stale = sorted(classified - gets)
+    assert not stale, f"classified routes that no longer exist: {stale}"
+
+    # And the classification must match what the guard actually does.
+    for path in PUBLIC_READ_ROUTES:
+        assert not needs_a_writer("GET", path), f"{path} is listed as public but is guarded"
+    for path in WRITER_ONLY_READ_ROUTES:
+        assert needs_a_writer("GET", path), f"{path} is listed as writer-only but is not guarded"

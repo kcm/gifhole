@@ -24,6 +24,14 @@ losing anything. Anything that would break that is a major change.
 
 ### Fixed
 
+- Half-configured access control refuses to start. A read token or public
+  reads without a write token used to warn and serve everything, which looks
+  like access control and is not.
+- `/openapi.json` is no longer served. The interactive docs were already off
+  but the schema was not, so `--public-reads` would have handed anyone a map
+  of every write route.
+- Nothing is printed, opened, or bound until the configuration is known to be
+  serviceable. An invalid one announced "serving:" and armed the browser first.
 - Port conflicts are handled before anything is printed or opened. It used to
   report "serving:" and open a browser after the bind had already failed, and
   exit 0, so a supervisor saw a clean start. Now an explicit `--port` that is

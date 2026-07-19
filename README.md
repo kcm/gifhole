@@ -345,9 +345,10 @@ those controls rather than offering buttons that fail. The rule is blunt on
 purpose: anything that is not a `GET` is refused, so a route added later cannot
 quietly become writable by a guest.
 
-`--read-token` and `--public-reads` both need `--token` as well. On their own
-they would read like access control while leaving every write wide open, so
-they are ignored with a warning.
+`--read-token` and `--public-reads` both need `--token` as well, and gifhole
+**refuses to start** without it rather than warning and carrying on. Either
+one alone would look like access control in your config while leaving every
+write open to everyone, and a log line is not a substitute for not doing that.
 
 The tokens are shared secrets over plain HTTP, so they are only as private as
 the network. For anything beyond a trusted LAN, put it behind a reverse proxy

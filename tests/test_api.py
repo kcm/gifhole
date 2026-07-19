@@ -543,13 +543,13 @@ def test_a_reader_is_told_which_it_is(shared):
     assert caps["read_only"] is False
 
 
-def test_a_read_token_alone_does_nothing(tmp_path):
-    """It would otherwise read as configured while leaving writes wide open."""
+def test_a_read_token_alone_refuses_to_start(tmp_path):
+    """Fail closed: asking for access control and not getting it must stop the
+    process, not log about it and serve everything anyway."""
     from gifhole.app import create_app
 
-    client = TestClient(create_app(tmp_path, auto_ocr=False, read_token="guest"))
-    assert client.get("/api/gifs").status_code == 200
-    assert client.get("/api/gifs", headers={"Authorization": "Bearer guest"}).status_code == 200
+    with pytest.raises(ValueError, match="write token"):
+        create_app(tmp_path, auto_ocr=False, read_token="guest")
 
 
 # -- public reads ------------------------------------------------------------
@@ -603,13 +603,12 @@ def test_a_stranger_is_told_the_page_is_read_only(gallery):
     assert caps["read_only"] is True
 
 
-def test_public_reads_without_a_write_token_is_ignored(tmp_path):
-    """Otherwise it would not be "public reads", it would be public everything,
-    which is what no configuration already means."""
+def test_public_reads_without_a_write_token_refuses_to_start(tmp_path):
+    """It would not be public reads, it would be public writes."""
     from gifhole.app import create_app
 
-    client = TestClient(create_app(tmp_path, auto_ocr=False, public_reads=True))
-    assert client.post("/api/rescan").status_code == 200
+    with pytest.raises(ValueError, match="write token"):
+        create_app(tmp_path, auto_ocr=False, public_reads=True)
 
 
 # -- the whole access model, in one table ------------------------------------
@@ -634,17 +633,24 @@ ACCESS_MATRIX = [
         {"token": "W", "public_reads": True},
         {None: (True, False), "W": (True, True), "R": (True, False)},
     ),
-    (
-        "a read token alone changes nothing",
-        {"read_token": "R"},
-        {None: (True, True), "W": (True, True), "R": (True, True)},
-    ),
-    (
-        "public reads alone changes nothing",
-        {"public_reads": True},
-        {None: (True, True), "W": (True, True), "R": (True, True)},
-    ),
 ]
+
+# Configurations that must refuse to start rather than serve something the
+# operator did not ask for.
+REFUSED_CONFIGS = [
+    ("a read token with no write token", {"read_token": "R"}),
+    ("public reads with no write token", {"public_reads": True}),
+]
+
+
+@pytest.mark.parametrize(("label", "config"), REFUSED_CONFIGS, ids=[c[0] for c in REFUSED_CONFIGS])
+def test_half_configured_access_refuses_to_start(tmp_path, label, config):
+    """Fail closed. Both of these once warned and served everything, which
+    looks like access control in the config and is not."""
+    from gifhole.app import create_app
+
+    with pytest.raises(ValueError, match="write token"):
+        create_app(tmp_path, auto_ocr=False, **config)
 
 
 @pytest.mark.parametrize(
