@@ -183,6 +183,10 @@ stray request cannot empty it.
   high-frequency pattern aliases under downsampling, so test fixtures must use
   large smooth shapes (`make_textured_gif`) or a resized copy stops matching.
   `NEAR_DISTANCE` is measured, not guessed: see the comment for the numbers.
+  Hashing is single-frame by design, never a comparison across the animation,
+  so two cuts of the same scene still match. `_frame_order()` tries a third of
+  the way in first and falls back rather than giving up, because a GIF that
+  opens on black would otherwise get no hash at all.
 - **A duplicate is reported, never rejected.** `/api/gifs` answers 200 with
   `{duplicate, matches}` and writes nothing; only `force` adds. Keep that shape:
   only the user can tell a re-encode from a different cut of the same scene.

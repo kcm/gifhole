@@ -4,6 +4,7 @@ Hermetic: no Vision calls, no network. The OCR path is exercised by injecting
 text through the store, which is the contract the rest of the app relies on.
 """
 
+import io
 import time
 
 from gifhole.frames import sample_frames, to_png_bytes, upscale_for_ocr
@@ -284,3 +285,44 @@ def test_null_meme_name_does_not_crash():
     )
     assert out["meme_name"] == ""
     assert out["description"] == "d"
+
+
+# -- perceptual hashing ------------------------------------------------------
+
+
+def _gif(path, frames):
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=100, loop=0)
+    return path
+
+
+def test_a_gif_that_opens_on_black_still_gets_a_hash(tmp_path):
+    """Hashing a fixed frame would give up here: the opening frames are flat,
+    and so is the one a third of the way in."""
+    from PIL import Image
+
+    from gifhole import dedupe
+    from tests.conftest import make_textured_gif
+
+    black = Image.new("RGB", (120, 90), (0, 0, 0))
+    content = Image.open(io.BytesIO(make_textured_gif(9, 120, 90))).convert("RGB")
+    path = _gif(tmp_path / "fade.gif", [black, black, black, black, content, content])
+    assert dedupe.perceptual_hash(path) != ""
+
+
+def test_a_gif_that_is_flat_throughout_gets_no_hash(tmp_path):
+    """Every flat image hashes alike, so they must not be comparable at all."""
+    from PIL import Image
+
+    from gifhole import dedupe
+
+    flat = Image.new("RGB", (120, 90), (18, 18, 18))
+    path = _gif(tmp_path / "flat.gif", [flat] * 5)
+    assert dedupe.perceptual_hash(path) == ""
+
+
+def test_frame_order_stays_in_range_and_is_deduped():
+    from gifhole.dedupe import _frame_order
+
+    assert _frame_order(1) == [0]
+    assert all(0 <= i < 12 for i in _frame_order(12))
+    assert len(set(_frame_order(12))) == len(_frame_order(12))

@@ -38,6 +38,14 @@ re-scraping a page or re-downloading a link. **Near** matches compare a
 perceptual hash of one frame, which catches the same GIF re-encoded, resized,
 or re-hosted, where the bytes differ but the picture does not.
 
+Comparison is always on a **single frame**, never across the animation: two
+cuts of the same scene at different lengths should still match, and
+frame-by-frame comparison would cost far more for a worse answer. Frame 0 is
+not the one used, though, because plenty of GIFs open on a fade or a title
+card; it takes one about a third in and falls back to other positions if that
+frame turns out to be flat. Hashing costs about 0.3 ms per GIF, so backfilling
+a few hundred is instant.
+
 The threshold was measured rather than guessed: across 30 resized pairs and 90
 unrelated pairs, the same picture at a different size scored at most 13 and
 different pictures never below 19, so the cutoff sits at 12. It leans towards

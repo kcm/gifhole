@@ -72,21 +72,45 @@ def dhash_image(image: Image.Image, size: int = HASH_SIZE) -> int | None:
     return bits
 
 
-def perceptual_hash(path: Path) -> str:
-    """dhash of a representative frame, as hex. Empty string if unreadable.
+def _frame_order(count: int) -> list[int]:
+    """Frames to try, best guess first, deduped and in range.
 
-    A frame from a third of the way in, not frame 0: plenty of GIFs open on a
-    fade, a title card, or black, and hashing that would call every one of them
-    a duplicate of every other.
+    Capped at a handful: this runs once per GIF on add and across the whole
+    library on backfill, and a GIF that is flat in four places is flat.
+    """
+    wanted = [count // 3, count // 2, 0, count - 1]
+    seen: list[int] = []
+    for index in wanted:
+        index = max(0, min(index, count - 1))
+        if index not in seen:
+            seen.append(index)
+    return seen
+
+
+def perceptual_hash(path: Path) -> str:
+    """dhash of one representative frame, as hex. Empty string if unreadable.
+
+    One frame, never a comparison across frames: two GIFs of the same scene cut
+    at different lengths should still match, and animation-aware comparison
+    would cost far more for a worse answer.
+
+    Which frame is the only subtlety. Frame 0 is a poor default because plenty
+    of GIFs open on a fade, a title card, or black, and those all hash alike.
+    So this tries a third of the way in first and walks to other positions if
+    that frame turns out to be flat, rather than giving up and leaving the GIF
+    with no perceptual hash at all.
     """
     try:
         with Image.open(path) as img:
-            frames = getattr(img, "n_frames", 1)
-            if frames > 1:
-                img.seek(frames // 3)
-            bits = dhash_image(img.convert("RGB"))
-            return "" if bits is None else f"{bits:016x}"
-    except (OSError, ValueError) as exc:
+            count = getattr(img, "n_frames", 1)
+            positions = [0] if count == 1 else _frame_order(count)
+            for index in positions:
+                img.seek(index)
+                bits = dhash_image(img.convert("RGB"))
+                if bits is not None:
+                    return f"{bits:016x}"
+            return ""
+    except (OSError, ValueError, EOFError) as exc:
         # Never fatal: a GIF that cannot be hashed is simply never deduped.
         log.debug("could not hash %s: %s", path, exc)
         return ""
