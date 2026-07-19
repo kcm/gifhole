@@ -38,8 +38,12 @@ Home End  first, last            p        copy its file path
 Esc       back out one layer     t        edit tags
                                  r        rename
 /   search        s  change sort e        describe with Claude
-a   add GIFs      R  rescan      x        move to trash
-g   grab a URL    ?  this list
+a   add GIFs      R  rescan
+g   grab a URL    ?  this list   Space v  select for bulk actions
+                                 A        select all, or none
+                                 x        move selected to trash
+                                 z        undo the last removal
+                                 T        open the trash
 ```
 
 Keys act on the **selected** GIF (outlined), falling back to whatever the
@@ -126,7 +130,23 @@ gifhole --root DIR    library location   (default ~/.gifhole)
        --reload      restart on source changes (development)
 ```
 
-Deleting a GIF moves it to `<root>/.trash/`; nothing is erased from disk.
+## Removing things
+
+Deleting is always a two-step affair, because the first step is undoable and
+only the second is not.
+
+**Removing** moves files to `<root>/.trash/`. Press `x` (or the card's `x`), or
+tick several with `Space` and remove them together. A single removal doesn't
+ask, because `z` takes it straight back; a batch does. *clear the library* in
+the footer moves everything to the trash at once.
+
+**The trash** (`T`, or the *Trash* button) lists what you removed, with sizes
+and when. Restore puts a GIF back under its original name, or under `name-2.gif`
+if you've since reused the name. **Deleting from the trash is the only thing in
+gifhole that destroys anything**, and it says so before it does.
+
+Trashed files are plain `.gif`s in a plain folder, so you can also just go
+looking with Finder.
 
 ## Homebrew, and running it at login (macOS)
 

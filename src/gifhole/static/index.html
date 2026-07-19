@@ -63,6 +63,7 @@
     <button id="add" class="primary">Add GIFs</button>
     <button id="grab" title="download from a GIF link or scrape a page">Grab URL</button>
     <button id="rescan" title="pick up files added to the folder by hand">Rescan</button>
+    <button id="trashbtn" title="restore or permanently delete removed GIFs">Trash</button>
     <input id="graburl" type="url" placeholder="paste a GIF or page URL, Enter to fetch" hidden>
     <!-- Visually hidden rather than display:none: some browsers won't open a
          file picker for a display:none input. -->
@@ -93,6 +94,29 @@
   <div id="pickgrid" class="pickgrid"></div>
 </div>
 
+<div id="bulk" class="bulk" hidden>
+  <span id="bulkcount" class="bulkcount"></span>
+  <button id="bulktrash" class="primary">Move to trash</button>
+  <button id="bulkclear">Deselect</button>
+</div>
+
+<div id="trash" class="trash" hidden>
+  <div class="trashbox">
+    <div class="trashhead">
+      <h2>trash</h2>
+      <span id="trashcount" class="trashsummary"></span>
+      <span class="picker-spacer"></span>
+      <button id="trashempty">Empty the trash</button>
+      <button id="trashclose">Close</button>
+    </div>
+    <ul id="trashlist" class="trashlist"></ul>
+    <p class="trashfoot">
+      Restored GIFs go back to the library. Deleting here is permanent; nothing
+      else in gifhole is. Files live in <span id="trashdir" class="trashdir"></span>
+    </p>
+  </div>
+</div>
+
 <div id="help" class="help" hidden>
   <div class="helpbox">
     <h2>keyboard</h2>
@@ -115,7 +139,16 @@
           <dt><kbd>t</kbd></dt><dd>edit tags</dd>
           <dt><kbd>r</kbd></dt><dd>rename</dd>
           <dt><kbd>e</kbd></dt><dd>describe with Claude</dd>
-          <dt><kbd>x</kbd></dt><dd>move to trash</dd>
+        </dl>
+      </section>
+      <section>
+        <h3>removing</h3>
+        <dl>
+          <dt><kbd>Space</kbd> <kbd>v</kbd></dt><dd>select for bulk actions</dd>
+          <dt><kbd>A</kbd></dt><dd>select all, or none</dd>
+          <dt><kbd>x</kbd></dt><dd>move selected to trash</dd>
+          <dt><kbd>z</kbd></dt><dd>undo the last removal</dd>
+          <dt><kbd>T</kbd></dt><dd>open the trash</dd>
         </dl>
       </section>
       <section>
@@ -148,6 +181,10 @@
     <option value="altavista">altavista</option>
     <option value="linkedin">linkedin</option>
   </select>
+  <span class="footspacer"></span>
+  <!-- Deliberately out of the way: rare, and it empties the wall. It moves
+       everything to the trash rather than deleting, so it is recoverable. -->
+  <button id="clearall" class="linkish danger">clear the library</button>
 </footer>
 
 <script src="/static/app.js"></script>

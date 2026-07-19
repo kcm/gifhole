@@ -131,6 +131,7 @@ function card(gif) {
     <div class="meta">
       <span class="name" contenteditable="plaintext-only" spellcheck="false"></span>
       <span class="dims"></span>
+      <button class="mark" title="select for bulk actions" aria-pressed="false"></button>
       <button class="del" title="move to trash">x</button>
     </div>
     <div class="rowtags">
@@ -179,12 +180,10 @@ function card(gif) {
   // and focus mid-file.
   tagEditor(el, gif);
 
-  el.querySelector(".del").addEventListener("click", async () => {
-    if (!confirm(`Move ${gif.filename} to .trash?`)) return;
-    await fetch(`/api/gifs/${gif.id}`, { method: "DELETE" });
-    toast("moved to .trash");
-    load();
-  });
+  el.querySelector(".mark").addEventListener("click", () => toggleMark(gif.id));
+  // No confirm on a single delete: it goes to the trash and "z" takes it
+  // straight back, so asking every time costs more than the mistake does.
+  el.querySelector(".del").addEventListener("click", () => trashIds([gif.id]));
 
   el.querySelector("figure").addEventListener("click", (e) => {
     // Clicking also moves the keyboard selection, so mouse and keyboard never
@@ -478,9 +477,73 @@ function targetCard() {
   return null;
 }
 
+// Marks for bulk actions, kept by id for the same reason as the selection: a
+// filter or re-sort must not silently re-point them at other GIFs.
+let marked = new Set();
+
+// The last batch of trash names, so a delete can be taken back. Cleared once
+// the trash is emptied, since there would be nothing left to restore.
+let lastTrashed = [];
+
+function paintMarks() {
+  [...grid.children].forEach((el, i) => {
+    const on = marked.has(state.gifs[i]?.id);
+    el.classList.toggle("marked", on);
+    el.querySelector(".mark")?.setAttribute("aria-pressed", String(on));
+  });
+  $("#bulk").hidden = marked.size === 0;
+  $("#bulkcount").textContent = `${marked.size} selected`;
+}
+
+function toggleMark(id) {
+  marked.has(id) ? marked.delete(id) : marked.add(id);
+  paintMarks();
+}
+
+function clearMarks() {
+  marked.clear();
+  paintMarks();
+}
+
+// What a bulk action applies to: the marked set, or the current GIF when
+// nothing is marked, so "x" means the same thing either way.
+function actionIds() {
+  if (marked.size) return [...marked];
+  const i = selectedIndex();
+  return i >= 0 ? [state.gifs[i].id] : [];
+}
+
+async function trashIds(ids) {
+  if (!ids.length) return;
+  const res = await fetch("/api/gifs/delete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  const out = await res.json();
+  lastTrashed = out.trashed || [];
+  clearMarks();
+  toast(`moved ${out.removed} to trash · press z to undo`);
+  load();
+}
+
+async function undoTrash() {
+  if (!lastTrashed.length) return toast("nothing to undo");
+  const res = await fetch("/api/trash/restore", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ names: lastTrashed }),
+  });
+  const out = await res.json();
+  lastTrashed = [];
+  toast(`restored ${out.restored.length}`);
+  load();
+}
+
 function render() {
   grid.replaceChildren(...state.gifs.map(card));
   paintSelection();
+  paintMarks();
   empty.hidden = state.gifs.length > 0;
   empty.textContent = state.gifs.length
     ? ""
@@ -935,6 +998,98 @@ const isTyping = (node) =>
   node instanceof HTMLElement &&
   (node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.isContentEditable);
 
+// ---------------------------------------------------------------- the trash
+
+const trashPanel = $("#trash");
+const trashList = $("#trashlist");
+const closeTrash = () => (trashPanel.hidden = true);
+
+async function openTrash() {
+  const data = await (await fetch("/api/trash")).json();
+  const entries = data.entries || [];
+  $("#trashcount").textContent = entries.length
+    ? `${entries.length} in the trash`
+    : "the trash is empty";
+  $("#trashempty").disabled = !entries.length;
+  $("#trashdir").textContent = data.dir || "";
+
+  trashList.replaceChildren(
+    ...entries.map((entry) => {
+      const row = document.createElement("li");
+      row.className = "trashrow";
+      const name = document.createElement("span");
+      name.className = "trashname";
+      name.textContent = entry.filename;
+      const when = document.createElement("span");
+      when.className = "trashwhen";
+      when.textContent = `${sizeOf(entry.bytes)} · ${agoOf(entry.deleted_at)}`;
+      const put = document.createElement("button");
+      put.className = "linkish";
+      put.textContent = "restore";
+      put.addEventListener("click", async () => {
+        await postJSON("/api/trash/restore", { names: [entry.name] });
+        toast(`restored ${entry.filename}`);
+        openTrash();
+        load();
+      });
+      const gone = document.createElement("button");
+      gone.className = "linkish danger";
+      gone.textContent = "delete";
+      gone.addEventListener("click", async () => {
+        if (!confirm(`Delete ${entry.filename} for good? This cannot be undone.`)) return;
+        await postJSON("/api/trash/purge", { names: [entry.name] });
+        openTrash();
+      });
+      row.append(name, when, put, gone);
+      return row;
+    }),
+  );
+  trashPanel.hidden = false;
+}
+
+const sizeOf = (bytes) =>
+  bytes > 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+
+function agoOf(seconds) {
+  const mins = Math.max(0, (Date.now() / 1000 - seconds) / 60);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${Math.round(mins)} min ago`;
+  if (mins < 1440) return `${Math.round(mins / 60)} h ago`;
+  return `${Math.round(mins / 1440)} d ago`;
+}
+
+const postJSON = (url, body) =>
+  fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  }).then((r) => r.json());
+
+$("#trashbtn").addEventListener("click", openTrash);
+$("#trashclose").addEventListener("click", closeTrash);
+$("#trashempty").addEventListener("click", async () => {
+  // Everything else in gifhole is recoverable; this is the one place that
+  // isn't, so it asks plainly and says so.
+  if (!confirm("Delete everything in the trash for good? This cannot be undone.")) return;
+  const out = await postJSON("/api/trash/purge", { all: true });
+  lastTrashed = [];
+  toast(`deleted ${out.purged} for good`);
+  openTrash();
+});
+
+$("#bulktrash").addEventListener("click", () => trashIds([...marked]));
+$("#bulkclear").addEventListener("click", clearMarks);
+$("#clearall").addEventListener("click", async () => {
+  const total = state.gifs.length;
+  if (!total) return toast("nothing to clear");
+  if (!confirm(`Move all ${total} GIFs to the trash? You can restore them from there.`)) return;
+  const out = await postJSON("/api/gifs/clear", { confirm: "clear" });
+  lastTrashed = out.trashed || [];
+  clearMarks();
+  toast(`moved ${out.removed} to trash · press z to undo`);
+  load();
+});
+
 const help = $("#help");
 const closeHelp = () => (help.hidden = true);
 const toggleHelp = () => (help.hidden = !help.hidden);
@@ -955,8 +1110,6 @@ const CARD_KEYS = {
     selectAll(name);
   },
   e: (t) => t.el.querySelector(".describe").click(),
-  x: (t) => t.el.querySelector(".del").click(),
-  Delete: (t) => t.el.querySelector(".del").click(),
 };
 
 addEventListener("keydown", (e) => {
@@ -966,8 +1119,10 @@ addEventListener("keydown", (e) => {
   // leaving a suggestion list doesn't also wipe the search you were refining.
   if (e.key === "Escape") {
     if (!help.hidden) return closeHelp();
+    if (!trashPanel.hidden) return closeTrash();
     if (!picker.hidden) return closePicker();
     if (typing) return; // fields handle their own Escape
+    if (marked.size) return clearMarks();
     if (selectedId !== null) {
       selectedId = null;
       return paintSelection();
@@ -1007,6 +1162,38 @@ addEventListener("keydown", (e) => {
   if (e.key === "End") {
     e.preventDefault();
     return select(state.gifs.length - 1);
+  }
+
+  // Removal. "x" trashes the marked set, or just the current GIF when nothing
+  // is marked, so it means the same thing whether or not you are batching.
+  if (e.key === "x" || e.key === "Delete") {
+    const ids = actionIds();
+    if (!ids.length) return;
+    e.preventDefault();
+    // One GIF goes without asking because "z" takes it straight back; a batch
+    // asks, because that is the one you would not want to fire by accident.
+    if (ids.length > 1 && !confirm(`Move ${ids.length} GIFs to the trash?`)) return;
+    return trashIds(ids);
+  }
+  if (e.key === "z") {
+    e.preventDefault();
+    return undoTrash();
+  }
+  if (e.key === " " || e.key === "v") {
+    const i = selectedIndex();
+    if (i < 0) return;
+    e.preventDefault();
+    return toggleMark(state.gifs[i].id);
+  }
+  if (e.key === "A") {
+    e.preventDefault();
+    if (marked.size === state.gifs.length) return clearMarks();
+    marked = new Set(state.gifs.map((g) => g.id));
+    return paintMarks();
+  }
+  if (e.key === "T") {
+    e.preventDefault();
+    return trashPanel.hidden ? openTrash() : closeTrash();
   }
 
   // Library-wide actions reuse the toolbar buttons, so there is one

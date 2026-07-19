@@ -39,6 +39,12 @@ MIGRATIONS = {
 }
 
 
+# Trashed files are named "<stamp>-<original>.gif", or "<stamp>-<n>-<original>"
+# when the same name is deleted twice in one second. Parsing it back is what
+# lets the trash list show real names and restore under them.
+TRASH_NAME = re.compile(r"^(?P<stamp>\d+)-(?:(?P<seq>\d+)-)?(?P<original>.+\.gif)$", re.IGNORECASE)
+
+
 @dataclass(frozen=True)
 class Gif:
     id: int
@@ -232,11 +238,16 @@ class Store:
         self.db.execute("UPDATE gifs SET copies = copies + 1 WHERE id = ?", (gif_id,))
         self.db.commit()
 
-    def remove(self, gif_id: int) -> bool:
-        """Move a GIF to .trash rather than deleting it, then drop its row."""
+    def remove(self, gif_id: int) -> str | None:
+        """Move a GIF to .trash rather than deleting it, then drop its row.
+
+        Returns the name it was given in .trash, which is what makes the
+        removal undoable; None if there was no such GIF.
+        """
         gif = self.get(gif_id)
         if gif is None:
-            return False
+            return None
+        trashed = None
         src = self.gifs_dir / gif.filename
         if src.exists():
             self.trash_dir.mkdir(parents=True, exist_ok=True)
@@ -250,9 +261,74 @@ class Store:
                 dest = self.trash_dir / f"{stamp}-{n}-{gif.filename}"
                 n += 1
             src.rename(dest)
+            trashed = dest.name
         self.db.execute("DELETE FROM gifs WHERE id = ?", (gif_id,))
         self.db.commit()
-        return True
+        return trashed or ""
+
+    # -- the trash -----------------------------------------------------------
+
+    def _trash_path(self, name: str) -> Path:
+        """Resolve a trash entry by name, refusing anything outside .trash.
+
+        The name arrives from the client, so `../../etc/passwd` has to bounce
+        here rather than at the caller.
+        """
+        path = (self.trash_dir / name).resolve()
+        if path.parent != self.trash_dir.resolve() or not path.is_file():
+            raise FileNotFoundError(name)
+        return path
+
+    def trash_entries(self) -> list[dict]:
+        """What is in .trash, newest first, with the original name recovered."""
+        if not self.trash_dir.is_dir():
+            return []
+        entries = []
+        for path in self.trash_dir.iterdir():
+            if not path.is_file() or path.suffix.lower() != ".gif":
+                continue
+            match = TRASH_NAME.match(path.name)
+            stat = path.stat()
+            entries.append(
+                {
+                    "name": path.name,
+                    "filename": match.group("original") if match else path.name,
+                    "bytes": stat.st_size,
+                    # Prefer the stamp in the name: it records when the delete
+                    # happened, where mtime only records the last write.
+                    "deleted_at": float(match.group("stamp")) if match else stat.st_mtime,
+                }
+            )
+        return sorted(entries, key=lambda e: e["deleted_at"], reverse=True)
+
+    def restore(self, name: str) -> Gif:
+        """Put a trashed GIF back, under its original name where that is free."""
+        path = self._trash_path(name)
+        match = TRASH_NAME.match(path.name)
+        original = match.group("original") if match else path.name
+        dest = self.gifs_dir / original
+        stem = dest.stem
+        n = 2
+        while dest.exists():
+            dest = self.gifs_dir / f"{stem}-{n}.gif"
+            n += 1
+        path.rename(dest)
+        return self._index(dest)
+
+    def purge(self, name: str) -> None:
+        """Delete one trashed file for good. There is nothing after this."""
+        self._trash_path(name).unlink()
+
+    def empty_trash(self) -> int:
+        count = 0
+        for entry in self.trash_entries():
+            self.purge(entry["name"])
+            count += 1
+        return count
+
+    def clear_library(self) -> list[str]:
+        """Move every GIF to .trash. Recoverable, unlike emptying the trash."""
+        return [name for g in self.list_gifs() if (name := self.remove(g.id)) is not None]
 
     def rescan(self) -> dict[str, int]:
         """Index new files on disk and forget rows whose file is gone."""

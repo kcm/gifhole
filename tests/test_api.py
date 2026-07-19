@@ -101,3 +101,76 @@ def test_cross_site_writes_are_refused(client, headers, allowed):
 
 def test_cross_site_reads_are_unaffected(client):
     assert client.get("/api/gifs", headers={"sec-fetch-site": "cross-site"}).status_code == 200
+
+
+# -- removal and the trash ---------------------------------------------------
+
+
+def _add(client, name="a.gif"):
+    res = client.post("/api/gifs", files={"file": (name, make_gif(), "image/gif")})
+    return res.json()["id"]
+
+
+def test_bulk_delete_trashes_every_id(client):
+    ids = [_add(client, f"b{i}.gif") for i in range(3)]
+    res = client.post("/api/gifs/delete", json={"ids": ids})
+    assert res.json()["removed"] == 3
+    assert client.get("/api/gifs").json()["gifs"] == []
+    assert len(client.get("/api/trash").json()["entries"]) == 3
+
+
+def test_bulk_delete_skips_ids_that_are_already_gone(client):
+    gif_id = _add(client)
+    res = client.post("/api/gifs/delete", json={"ids": [gif_id, 4242]})
+    assert res.json()["removed"] == 1
+
+
+def test_delete_reports_what_it_trashed_so_it_can_be_undone(client):
+    gif_id = _add(client, "undome.gif")
+    trashed = client.delete(f"/api/gifs/{gif_id}").json()["trashed"]
+    assert len(trashed) == 1
+    restored = client.post("/api/trash/restore", json={"names": trashed}).json()
+    assert [g["filename"] for g in restored["restored"]] == ["undome.gif"]
+    assert len(client.get("/api/gifs").json()["gifs"]) == 1
+
+
+def test_restore_reports_names_it_could_not_find(client):
+    res = client.post("/api/trash/restore", json={"names": ["nope-1234.gif"]})
+    assert res.json() == {"ok": True, "restored": [], "missing": ["nope-1234.gif"]}
+
+
+def test_clearing_the_library_needs_the_confirm_field(client):
+    _add(client)
+    assert client.post("/api/gifs/clear", json={}).status_code == 400
+    assert client.post("/api/gifs/clear", json={"confirm": "nope"}).status_code == 400
+    assert len(client.get("/api/gifs").json()["gifs"]) == 1
+
+
+def test_clearing_the_library_keeps_everything_in_the_trash(client):
+    ids = [_add(client, f"c{i}.gif") for i in range(3)]
+    res = client.post("/api/gifs/clear", json={"confirm": "clear"})
+    assert res.json()["removed"] == len(ids)
+    assert client.get("/api/gifs").json()["gifs"] == []
+    assert len(client.get("/api/trash").json()["entries"]) == 3
+
+
+def test_purge_will_not_act_without_being_told_what(client):
+    """The one destructive route in the app; a bare call must not empty it."""
+    _add(client)
+    client.post("/api/gifs/clear", json={"confirm": "clear"})
+    assert client.post("/api/trash/purge", json={}).status_code == 400
+    assert len(client.get("/api/trash").json()["entries"]) == 1
+
+
+def test_purge_all_empties_the_trash(client):
+    _add(client)
+    client.post("/api/gifs/clear", json={"confirm": "clear"})
+    assert client.post("/api/trash/purge", json={"all": True}).json()["purged"] == 1
+    assert client.get("/api/trash").json()["entries"] == []
+
+
+def test_purge_cannot_reach_outside_the_trash(client):
+    gif_id = _add(client, "safe.gif")
+    res = client.post("/api/trash/purge", json={"names": ["../gifs/safe.gif"]})
+    assert res.json()["purged"] == 0
+    assert client.get("/api/gifs").json()["gifs"][0]["id"] == gif_id

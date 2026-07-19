@@ -28,6 +28,15 @@ the database authoritative over what exists.
 
 Deletes move files to `.trash/`, they do not unlink. Preserve that.
 
+**`store.purge()` / `empty_trash()` are the only code in the project that
+destroy data.** Everything else is recoverable, and that asymmetry is the whole
+safety model: single deletes skip the confirm precisely because `z` restores
+them. Route every trash filename through `_trash_path()`, which refuses
+anything resolving outside `.trash/` (the names come from the client, so
+`../gifs/keepme.gif` has to bounce there, not at the caller). `/api/trash/purge`
+additionally refuses a bare call: name the entries or pass `all=true`, so a
+stray request cannot empty it.
+
 ## Conventions
 
 - `uv run pytest` and `uv run ruff check .` must both be clean before finishing.

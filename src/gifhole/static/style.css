@@ -281,6 +281,153 @@ button.primary {
   outline-offset: 1px;
 }
 
+/* A marked card reads as picked-up: tinted edge plus a filled checkbox. Kept
+   distinct from .selected, which is only "where the keyboard is". */
+.card.marked {
+  border-color: var(--link);
+  background: color-mix(in srgb, var(--link) 7%, var(--panel));
+}
+
+.mark {
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  flex: none;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.mark:hover {
+  border-color: var(--link);
+}
+
+.mark[aria-pressed="true"] {
+  background: var(--link);
+  border-color: var(--link);
+}
+
+/* -- bulk action bar ------------------------------------------------------- */
+
+.bulk {
+  position: fixed;
+  z-index: 40;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 22%);
+}
+
+.bulkcount {
+  font-size: 13px;
+  color: var(--panel-ink);
+}
+
+/* -- the trash ------------------------------------------------------------- */
+
+.trash {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: var(--scrim);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.trashbox {
+  width: min(640px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 25%);
+  padding: 16px 18px;
+  color: var(--panel-ink);
+}
+
+.trashhead {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.trashbox h2 {
+  margin: 0;
+  font: var(--font-head);
+  font-size: 22px;
+  color: var(--head-color);
+}
+
+.trashsummary {
+  font-size: 13px;
+  color: var(--panel-muted);
+}
+
+.trashlist {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.trashrow {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 0;
+  border-top: 1px solid var(--rule);
+  font-size: 13px;
+}
+
+.trashname {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trashwhen {
+  color: var(--panel-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.trashfoot {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--panel-muted);
+}
+
+.trashdir {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+/* The only irreversible actions in the app; they should not look like the
+   rest. */
+.danger {
+  color: var(--link-hot);
+}
+
+.footspacer {
+  flex: 1;
+}
+
 /* -- keyboard help --------------------------------------------------------- */
 
 .help {

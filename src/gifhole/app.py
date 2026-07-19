@@ -139,9 +139,72 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
     @app.delete("/api/gifs/{gif_id}")
     def delete(gif_id: int) -> JSONResponse:
         """Moves the file to .trash; nothing is erased from disk."""
-        if not store.remove(gif_id):
+        trashed = store.remove(gif_id)
+        if trashed is None:
             raise HTTPException(404, "no such gif")
-        return JSONResponse({"ok": True, "trash": str(store.trash_dir)})
+        return JSONResponse({"ok": True, "trash": str(store.trash_dir), "trashed": [trashed]})
+
+    @app.post("/api/gifs/delete")
+    def delete_many(payload: dict) -> JSONResponse:
+        """Trash a batch in one request, so removing 40 GIFs isn't 40 round trips."""
+        ids = [i for i in (payload.get("ids") or []) if isinstance(i, int)]
+        trashed = [name for i in ids if (name := store.remove(i)) is not None]
+        return JSONResponse({"ok": True, "removed": len(trashed), "trashed": trashed})
+
+    @app.post("/api/gifs/clear")
+    def clear_all(payload: dict) -> JSONResponse:
+        """Empty the library into .trash.
+
+        Guarded by an explicit confirm field rather than the method alone: this
+        is one request away from clearing everything, and a stray call should
+        bounce instead of being obeyed. Nothing is erased; .trash still has it.
+        """
+        if payload.get("confirm") != "clear":
+            raise HTTPException(400, "clearing the library needs confirm=clear")
+        trashed = store.clear_library()
+        return JSONResponse({"ok": True, "removed": len(trashed), "trashed": trashed})
+
+    # -- the trash -----------------------------------------------------------
+
+    @app.get("/api/trash")
+    def list_trash() -> JSONResponse:
+        return JSONResponse({"entries": store.trash_entries(), "dir": str(store.trash_dir)})
+
+    @app.post("/api/trash/restore")
+    def restore_trash(payload: dict) -> JSONResponse:
+        """Put trashed GIFs back. Also what the undo after a delete calls."""
+        names = [n for n in (payload.get("names") or []) if isinstance(n, str)]
+        restored, missing = [], []
+        for name in names:
+            try:
+                gif = store.restore(name)
+            except (FileNotFoundError, OSError):
+                missing.append(name)
+                continue
+            restored.append(gif.as_dict())
+            queue_ocr(gif.id, gif.filename)
+        return JSONResponse({"ok": True, "restored": restored, "missing": missing})
+
+    @app.post("/api/trash/purge")
+    def purge_trash(payload: dict) -> JSONResponse:
+        """Delete trashed files for good.
+
+        The only route in the app that destroys anything, so it will not act on
+        a bare request: either name the entries, or ask for `all` outright.
+        """
+        names = [n for n in (payload.get("names") or []) if isinstance(n, str)]
+        if payload.get("all") is True:
+            return JSONResponse({"ok": True, "purged": store.empty_trash()})
+        if not names:
+            raise HTTPException(400, "name what to purge, or pass all=true")
+        purged = 0
+        for name in names:
+            try:
+                store.purge(name)
+            except (FileNotFoundError, OSError):
+                continue
+            purged += 1
+        return JSONResponse({"ok": True, "purged": purged})
 
     @app.post("/api/rescan")
     def rescan() -> JSONResponse:
