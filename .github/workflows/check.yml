@@ -1,0 +1,56 @@
+# Runs on every push and pull request. Until now the tests only ran when
+# someone remembered to run them, which is the same as not having them.
+#
+# Hermetic by design: no network, no Vision, no Claude, no ffmpeg. The optional
+# layers all degrade to nothing when their dependency is absent, so a plain
+# Linux runner exercises the real code paths rather than skipping them.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - run: uv sync
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format
+        run: uv run ruff format --check .
+
+      - name: Syntax-check the frontend
+        # There is no bundler, so nothing else would notice a syntax error in
+        # app.js until the page failed to load in a browser.
+        run: node --check src/gifhole/static/app.js
+
+      - name: Tests
+        run: uv run pytest -q
+
+      - name: Confirm the app still starts without optional dependencies
+        # The point of the degradation rules: OCR, enrichment and ffmpeg are all
+        # absent here, and the server must come up regardless.
+        run: |
+          uv run python - <<'PY'
+          import tempfile
+          from fastapi.testclient import TestClient
+          from gifhole.app import create_app
+
+          with tempfile.TemporaryDirectory() as root:
+              client = TestClient(create_app(root, auto_ocr=False))
+              assert client.get("/api/gifs").status_code == 200
+              caps = client.get("/api/jobs").json()["capabilities"]
+              print("capabilities without optional deps:", caps)
+              assert caps["ocr"] is False, "Vision should be unavailable on Linux"
+              assert caps["enrich"] is False, "no API key is configured here"
+          print("starts clean with nothing optional installed")
+          PY

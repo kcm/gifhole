@@ -121,6 +121,27 @@ stray request cannot empty it.
   README's "known gaps" section lists these; keep it truthful rather than
   aspirational.
 
+## What is checked automatically
+
+`tests/test_contracts.py` enforces the couplings no tool can see, because the
+frontend has no bundler and no type checker. Each assertion exists because the
+bug happened here:
+
+- ids `app.js` looks up must exist in `index.html`
+- job kinds the UI watches must be kinds `app.py` submits (renaming `enrich` to
+  `describe` silently stopped cards refreshing)
+- capabilities the UI reads must be ones the server sends, since a missing one
+  is `undefined`, which is falsy, so the feature disables itself quietly
+- no interpolation into `innerHTML`, no classes toggled that no stylesheet has
+- no em or en dashes, and no credentials, in any tracked file
+
+Prefer adding a case there over writing it down as a rule below: a rule is only
+as good as the next person's memory, and these run in a second.
+
+CI (`.github/workflows/check.yml`) runs lint, format, `node --check` on the
+frontend, the suite, and a boot with no optional dependencies present, which is
+what keeps the degradation rules honest on a machine without Vision or ffmpeg.
+
 ## Gotchas
 
 - **`[hidden]` needs the `!important` reset in `style.css`.** Author `display`

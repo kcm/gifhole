@@ -22,6 +22,12 @@ losing anything. Anything that would break that is a major change.
 
 ### Added
 
+- Continuous integration on every push and pull request: lint, format, a
+  syntax check of the bundler-less frontend, the suite, and a boot with no
+  optional dependencies installed.
+- Contract tests for the couplings nothing else can see: element ids, job
+  kinds, and capability names shared between the Python and the JavaScript,
+  plus repo hygiene checks for stray credentials and for dashes.
 - Pushing a `vX.Y.Z` tag now publishes the matching GitHub release, with the
   notes taken from this file so the two cannot drift. The workflow runs the
   tests and refuses a tag that disagrees with the packaged version.
