@@ -71,11 +71,6 @@ def available() -> bool:
     return bool(backend())
 
 
-def vision_available() -> bool:
-    """Kept for callers that specifically mean Vision, not OCR in general."""
-    return _load_vision() is not None
-
-
 def _recognize_tesseract(png_bytes: bytes) -> list[str]:
     """OCR one frame with Tesseract, via TSV so confidence can be honoured.
 

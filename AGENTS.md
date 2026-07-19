@@ -149,6 +149,19 @@ CI (`.github/workflows/check.yml`) runs lint, format, `node --check` on the
 frontend, the suite, and a boot with no optional dependencies present, which is
 what keeps the degradation rules honest on a machine without Vision or ffmpeg.
 
+**A green suite on macOS does not mean a green suite.** This box has Vision,
+ffmpeg and a pasteboard, so a test can pass here for a reason that does not
+exist elsewhere: one gating on OCR passed locally because Vision really was
+present, while the stub it thought it was using had been renamed out from under
+it. Run the suite in the container before pushing anything that touches an
+optional capability:
+
+```
+docker run --rm -v "$PWD":/src:ro python:3.13-slim sh -c \
+  'cp -r /src /work && cd /work && rm -rf .venv .git &&
+   pip install -q uv && uv sync -q && uv run pytest -q'
+```
+
 ## Gotchas
 
 - **`[hidden]` needs the `!important` reset in `style.css`.** Author `display`

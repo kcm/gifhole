@@ -160,7 +160,10 @@ def test_failed_ocr_is_recorded_as_a_failure_not_as_empty_text(tmp_path, monkeyp
     from gifhole import ocr
     from gifhole.app import create_app
 
-    monkeypatch.setattr(ocr, "vision_available", lambda: True)
+    # Patch what the app actually gates on. Patching a differently-named
+    # helper made this pass on macOS for the wrong reason (real Vision was
+    # present) and fail everywhere the stub was the only engine.
+    monkeypatch.setattr(ocr, "available", lambda: True)
     monkeypatch.setattr(
         ocr,
         "read_gif_text",

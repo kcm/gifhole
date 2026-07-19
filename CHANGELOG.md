@@ -24,6 +24,10 @@ losing anything. Anything that would break that is a major change.
 
 ### Fixed
 
+- OCR-gated code paths are tested against the function the app actually gates
+  on. A rename left one test patching a helper nothing called, so it passed on
+  macOS because Vision was genuinely present and failed wherever the stub was
+  the only engine.
 - The release workflow reads the changelog and its notes script from the
   default branch rather than from the tag being released. A tag is a snapshot
   and can predate both, which is exactly what happened with `v0.1.0`: the tag
