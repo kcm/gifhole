@@ -46,6 +46,10 @@ losing anything. Anything that would break that is a major change.
 
 ### Added
 
+- `scripts/gifhole-pick`, a macOS launcher: search the library and copy a GIF
+  onto the clipboard, animation intact, without leaving what you are typing in.
+  Native AppleScript picker, no third-party launcher, bindable to a hotkey with
+  Shortcuts.app or Automator.
 - Search filter words `untagged`, `undescribed` and `untitled`, which combine
   with ordinary search terms. Filing needs a way to see what is left, and a
   count in a panel is not something you can type. Idea borrowed from gifdex.

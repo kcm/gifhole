@@ -409,6 +409,34 @@ The file's header comment walks through both. ffmpeg is intentionally not a
 dependency, because gifhole runs fine without it and skips video sources; run
 `brew install ffmpeg` to enable video-to-GIF conversion.
 
+## Copying a GIF from anywhere (macOS)
+
+`scripts/gifhole-pick` searches the library and puts a GIF on the clipboard
+without you leaving whatever you are typing in. It uses gifhole's own clipboard
+route, so the paste stays animated.
+
+```
+scripts/gifhole-pick              # asks for a search term
+scripts/gifhole-pick shrug        # searches straight away
+scripts/gifhole-pick --url shrug  # copies the URL instead of the file
+```
+
+One match copies immediately; several open a native picker showing names and
+tags. It reads `GIFHOLE_URL` and `GIFHOLE_TOKEN`, so it works against a server
+as well as a local instance.
+
+**To put it on a hotkey**, use Shortcuts.app (no third-party launcher needed):
+
+1. Shortcuts, **File > New Shortcut**, add the **Run Shell Script** action.
+2. Set the script to the full path, for example
+   `/Users/you/src/gifhole/scripts/gifhole-pick`.
+3. Name it, then **Shortcut Details > Add Keyboard Shortcut** and pick a key.
+
+Automator's *Quick Action* works the same way if you prefer it: add **Run Shell
+Script**, then assign a key under System Settings > Keyboard > Keyboard
+Shortcuts > Services. Either way the script is doing the work, so an Alfred or
+Raycast wrapper is a few lines for anyone who uses those.
+
 ## Docker
 
 Run it without a Python toolchain:

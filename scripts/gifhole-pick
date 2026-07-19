@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Search gifhole and copy a GIF, without leaving whatever you are in.
+
+Bind it to a hotkey (see the README) and the flow is: press the key, type a
+word, pick from the list, paste. Everything is native: an AppleScript list
+dialog for the picker, and gifhole's own clipboard route to put the real file
+on the pasteboard, so the paste stays animated.
+
+    gifhole-pick              # ask for a search term
+    gifhole-pick shrug        # search straight away
+    gifhole-pick --url shrug  # copy the URL instead of the file
+
+Reads GIFHOLE_URL (default http://127.0.0.1:8777) and GIFHOLE_TOKEN.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+BASE = os.environ.get("GIFHOLE_URL", "http://127.0.0.1:8777").rstrip("/")
+TOKEN = os.environ.get("GIFHOLE_TOKEN", "")
+TIMEOUT = 10
+
+
+def osascript(script: str) -> str:
+    """Run AppleScript and return stdout. Empty when the user cancels."""
+    done = subprocess.run(
+        ["osascript", "-e", script], capture_output=True, text=True, check=False
+    )
+    return done.stdout.strip()
+
+
+def notify(message: str, title: str = "gifhole") -> None:
+    osascript(f"display notification {json.dumps(message)} with title {json.dumps(title)}")
+
+
+def die(message: str) -> None:
+    # Always stderr, for when it is run from a terminal. Plus a notification,
+    # because launched from a hotkey there is nowhere to read stderr.
+    #
+    # A notification rather than `display alert`: an alert is modal and blocks
+    # until it is clicked, which is a poor thing for a background script to do
+    # to whatever you were typing in.
+    print(f"gifhole-pick: {message}", file=sys.stderr)
+    if not sys.stdout.isatty():
+        notify(message)
+    raise SystemExit(1)
+
+
+def call(path: str, method: str = "GET") -> dict:
+    request = urllib.request.Request(f"{BASE}{path}", method=method)
+    if TOKEN:
+        request.add_header("Authorization", f"Bearer {TOKEN}")
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            return json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            die("gifhole needs a token. Set GIFHOLE_TOKEN.")
+        die(f"gifhole said {exc.code} for {path}")
+    except (urllib.error.URLError, TimeoutError):
+        die(f"no gifhole at {BASE}. Is it running?")
+    return {}
+
+
+def ask_for_a_word() -> str:
+    answer = osascript(
+        'text returned of (display dialog "Find a GIF" default answer "" '
+        'with title "gifhole" buttons {"Cancel", "Search"} default button "Search")'
+    )
+    return answer.strip()
+
+
+def choose(gifs: list[dict]) -> dict | None:
+    """Native list picker. Labels carry tags, since names are often useless."""
+    labels = []
+    for gif in gifs:
+        name = gif.get("title") or gif["filename"].removesuffix(".gif")
+        tags = " ".join(gif.get("tags") or [])
+        labels.append(f"{name} - {tags}" if tags else name)
+
+    items = ", ".join(json.dumps(label) for label in labels)
+    picked = osascript(
+        f"set choices to {{{items}}}\n"
+        'set answer to choose from list choices with title "gifhole" '
+        'with prompt "Pick one" without multiple selections allowed\n'
+        "if answer is false then return \"\"\n"
+        "return item 1 of answer"
+    )
+    if not picked:
+        return None
+    for gif, label in zip(gifs, labels, strict=True):
+        if label == picked:
+            return gif
+    return None
+
+
+def main() -> None:
+    args = [a for a in sys.argv[1:] if a != "--url"]
+    as_url = "--url" in sys.argv[1:]
+
+    query = " ".join(args) or ask_for_a_word()
+    if not query:
+        return  # cancelled, which is not a failure
+
+    found = call(f"/api/gifs?q={urllib.parse.quote(query)}").get("gifs", [])
+    if not found:
+        notify(f"nothing matching {query}")
+        return
+
+    # One hit needs no picker: the whole point is to be faster than opening the
+    # page, and a dialog with a single item in it is pure ceremony.
+    gif = found[0] if len(found) == 1 else choose(found)
+    if gif is None:
+        return
+
+    if as_url:
+        subprocess.run(["pbcopy"], input=f"{BASE}{gif['url']}".encode(), check=False)
+        notify(f"copied the URL for {gif['filename']}")
+        return
+
+    call(f"/api/gifs/{gif['id']}/clipboard", method="POST")
+    notify(f"copied {gif['filename']}, animation intact")
+
+
+if __name__ == "__main__":
+    main()
