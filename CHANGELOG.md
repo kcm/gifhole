@@ -22,6 +22,15 @@ losing anything. Anything that would break that is a major change.
 
 ### Added
 
+### Fixed
+
+- The release workflow reads the changelog and its notes script from the
+  default branch rather than from the tag being released. A tag is a snapshot
+  and can predate both, which is exactly what happened with `v0.1.0`: the tag
+  has no `scripts/` directory, so releasing it failed at the notes step.
+
+### Added
+
 - Dockerfile and compose file: run gifhole without a Python toolchain, with the
   library bind-mounted so the GIFs stay ordinary files on the host. Doubles as
   the Linux test environment, where the suite now passes with the macOS-only

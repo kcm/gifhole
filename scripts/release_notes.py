@@ -5,6 +5,11 @@ Used by the release workflow so a GitHub release says the same thing as the
 changelog, rather than being written twice and drifting. Runnable by hand:
 
     python scripts/release_notes.py 0.1.0
+    python scripts/release_notes.py v0.1.0 path/to/CHANGELOG.md
+
+The changelog path is an argument because the release workflow reads the one on
+the default branch, not the one in the tag being released: a tag is a snapshot
+and can predate both this script and its own changelog entry.
 """
 
 from __future__ import annotations
@@ -40,9 +45,12 @@ def notes_for(version: str, text: str) -> str:
 
 
 def main() -> None:
-    if len(sys.argv) != 2:
-        raise SystemExit("usage: release_notes.py VERSION")
-    print(notes_for(sys.argv[1], CHANGELOG.read_text()))
+    if len(sys.argv) not in (2, 3):
+        raise SystemExit("usage: release_notes.py VERSION [CHANGELOG.md]")
+    changelog = Path(sys.argv[2]) if len(sys.argv) == 3 else CHANGELOG
+    if not changelog.is_file():
+        raise SystemExit(f"no changelog at {changelog}")
+    print(notes_for(sys.argv[1], changelog.read_text()))
 
 
 if __name__ == "__main__":

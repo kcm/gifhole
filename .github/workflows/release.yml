@@ -42,9 +42,21 @@ jobs:
           printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
           printf 'number=%s\n' "${TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - name: Check out the tag being released
+        uses: actions/checkout@v4
         with:
           ref: ${{ steps.version.outputs.tag }}
+
+      # The changelog and the notes script live on the default branch and grow
+      # over time. A tag is a snapshot and can predate both, which is exactly
+      # what happened releasing v0.1.0: the tag has no scripts/ directory at
+      # all, so the notes step failed. Tests and the build still run against
+      # the tag, since that is the code being released.
+      - name: Check out main for the release tooling
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: .tooling
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -74,11 +86,15 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
-          uv run python scripts/release_notes.py "$TAG" > NOTES.md
+          uv run python .tooling/scripts/release_notes.py "$TAG" .tooling/CHANGELOG.md > NOTES.md
           cat NOTES.md
 
       - name: Build the distributions
-        run: uv build
+        run: |
+          set -euo pipefail
+          # Out of the tree before building, or it lands in the sdist.
+          rm -rf .tooling
+          uv build
 
       - name: Publish
         env:
