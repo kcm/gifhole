@@ -675,9 +675,13 @@ async function postFile(file, force = false) {
   return res.ok ? res.json() : null;
 }
 
-async function upload(files) {
-  const gifs = [...files].filter((f) => f.type === "image/gif" || f.name.endsWith(".gif"));
-  if (!gifs.length) return toast("no GIFs in that drop");
+// Pasted files can arrive with no name at all, so the type is checked first and
+// the name check tolerates its absence.
+const isGifFile = (f) => f.type === "image/gif" || !!f.name?.toLowerCase().endsWith(".gif");
+
+async function upload(files, source = "drop") {
+  const gifs = [...files].filter(isGifFile);
+  if (!gifs.length) return toast(`no GIFs in that ${source}`);
   let ok = 0;
   const dupes = [];
   for (const file of gifs) {
@@ -1049,12 +1053,46 @@ grabUrl.addEventListener("keydown", (e) => {
   }
 });
 
-// Pasting a URL anywhere goes straight to the grabber, the common case. Skip
-// it while typing in a field, including the grab box itself.
+// Pasting anywhere adds: a copied GIF file goes in like a drop, a URL goes to
+// the grabber. Skipped while typing in a field, including the grab box itself,
+// or pasting a caption into a description would upload something instead.
 addEventListener("paste", (e) => {
   const el = document.activeElement;
-  if (el === search || el === grabUrl || el?.isContentEditable) return;
-  const text = e.clipboardData?.getData("text")?.trim();
+  if (el === search || el === grabUrl || el?.isContentEditable || el?.tagName === "INPUT") return;
+
+  const data = e.clipboardData;
+  if (!data) return;
+
+  // Gather from both places before deciding anything. Copying a GIF in Finder
+  // puts a real file on the clipboard, which is what a drop delivers too, so it
+  // takes the same path and gets the same duplicate check. Some sources expose
+  // it only as an item rather than in .files.
+  const files = [...(data.files || [])];
+  if (!files.length) {
+    files.push(
+      ...[...(data.items || [])]
+        .filter((i) => i.kind === "file")
+        .map((i) => i.getAsFile())
+        .filter(Boolean),
+    );
+  }
+
+  const gifs = files.filter(isGifFile);
+  if (gifs.length) {
+    e.preventDefault();
+    return upload(gifs, "paste");
+  }
+
+  // An image, but not a GIF. Worth saying so: copying a picture out of a web
+  // page usually yields a PNG, and the animation was never on the clipboard at
+  // all, so silence would look like a bug rather than an explanation.
+  const image = files.find((f) => f.type?.startsWith("image/"));
+  if (image) {
+    e.preventDefault();
+    return toast(`that is ${image.type}, not a GIF. Copy the file itself, or paste its URL`);
+  }
+
+  const text = data.getData("text")?.trim();
   if (text && /^https?:\/\/\S+$/.test(text)) {
     e.preventDefault();
     grab(text);

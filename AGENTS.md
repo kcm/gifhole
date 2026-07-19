@@ -251,6 +251,13 @@ stray request cannot empty it.
   cannot be undone. Any new destructive control in a panel should use the same
   helper, and must disarm when the panel closes or reopens or it would be
   waiting armed the next time it's opened.
+- **Paste, drop and the file picker share `upload()`**, so a pasted GIF gets
+  the same duplicate check and the same OCR as a dropped one. Paste reads
+  `clipboardData.files` and falls back to `items`, since some sources only
+  populate one; it bails out when a field has focus, or pasting a caption into
+  a description would upload something. An image that is not a GIF says so:
+  copying a picture out of a web page yields a PNG and the animation was never
+  on the clipboard, so silence reads as a bug.
 - **Inline edits save directly, never only via `blur`.** The tag field and the
   description both commit on Enter and treat blur as a second chance. Blur is
   not reliable enough to be the only path: the element can lose focus without

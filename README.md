@@ -16,7 +16,9 @@ it somewhere else with `--root ~/Pictures/gifs`.
   On macOS the animation survives; see [copying](#on-copying-and-keeping-the-animation)
 - **shift-click**: copies its `http://127.0.0.1:8777/...` URL
 - **alt-click** (option-click on a Mac): copies its file path
-- **drag GIFs onto the window** (or press *Add GIFs*) to add them
+- **drag GIFs onto the window**, **paste one** (copy the file in Finder, then
+  press paste anywhere on the page), or press *Add GIFs*. All three take the
+  same path, including the duplicate check
 - **paste a URL**, or press *Grab URL* and type one, to download from a `.gif`
   link or scrape a page. Giphy, Tenor, Reddit, and Imgur included
 - click a name to rename it
