@@ -186,3 +186,7 @@ uv run gifhole --reload        # picks up source edits without a restart
 `--reload` watches the package's `.py` files and restarts the server when one
 changes, so you never test against code you already edited. Static assets are
 read from disk per request and need no restart, only a browser refresh.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
