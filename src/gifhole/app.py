@@ -355,8 +355,7 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
             except enrich.EnrichError as exc:
                 if any(w in str(exc).lower() for w in ("authentication", "api_key", "api key")):
                     auth_block["why"] = (
-                        "no API key. Set ANTHROPIC_API_KEY or run `ant auth login`, "
-                        "then try again"
+                        "no API key. Set ANTHROPIC_API_KEY or run `ant auth login`, then try again"
                     )
                 raise
             auth_block["why"] = None

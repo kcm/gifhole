@@ -241,8 +241,12 @@ def test_meme_name_goes_in_the_description_not_the_tags():
 
 def test_meme_name_is_not_repeated_when_already_in_the_description():
     out = merge_result(
-        {"description": "This Is Fine: a dog in a fire", "meme_name": "this is fine",
-         "known_tags": [], "new_tags": []},
+        {
+            "description": "This Is Fine: a dog in a fire",
+            "meme_name": "this is fine",
+            "known_tags": [],
+            "new_tags": [],
+        },
         [],
     )
     assert out["description"] == "This Is Fine: a dog in a fire"

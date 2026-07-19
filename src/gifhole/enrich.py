@@ -147,9 +147,7 @@ def describe_gif(path: Path, frames: int = 3, vocabulary: list[str] | None = Non
             model=MODEL,
             max_tokens=1024,
             thinking={"type": "adaptive"},
-            output_config={
-                "format": {"type": "json_schema", "schema": build_schema(vocabulary)}
-            },
+            output_config={"format": {"type": "json_schema", "schema": build_schema(vocabulary)}},
             messages=[{"role": "user", "content": content}],
         )
     except Exception as exc:
