@@ -52,7 +52,9 @@
   </div>
   <hr>
   <div class="bar">
-    <input id="search" type="search" placeholder="search name or tag" autocomplete="off" autofocus>
+    <!-- Deliberately not autofocus: it would swallow every shortcut on load,
+         including the "?" the hint advertises. "/" is one keystroke away. -->
+    <input id="search" type="search" placeholder="search name or tag" autocomplete="off">
     <select id="sort" title="sort order">
       <option value="added">newest</option>
       <option value="name">name</option>
@@ -68,8 +70,9 @@
   </div>
   <div id="tags" class="tags"></div>
   <p class="hint">
-    click copies the image &middot; shift-click copies the URL &middot; alt-click copies the file path
-    &middot; press t to tag whatever you're pointing at
+    <span class="hinttext">click copies the image &middot; shift-click copies the URL
+      &middot; alt-click copies the file path</span>
+    &middot; <button id="helpbtn" class="linkish">keyboard shortcuts</button>
   </p>
   <div id="jobs" class="jobs" hidden></div>
   <hr>
@@ -88,6 +91,47 @@
     <button id="pickcancel">Cancel</button>
   </div>
   <div id="pickgrid" class="pickgrid"></div>
+</div>
+
+<div id="help" class="help" hidden>
+  <div class="helpbox">
+    <h2>keyboard</h2>
+    <div class="helpcols">
+      <section>
+        <h3>moving around</h3>
+        <dl>
+          <dt><kbd>h</kbd> <kbd>j</kbd> <kbd>k</kbd> <kbd>l</kbd></dt><dd>move between GIFs</dd>
+          <dt><kbd>&larr;</kbd> <kbd>&darr;</kbd> <kbd>&uarr;</kbd> <kbd>&rarr;</kbd></dt><dd>the same</dd>
+          <dt><kbd>Home</kbd> <kbd>End</kbd></dt><dd>first, last</dd>
+          <dt><kbd>Esc</kbd></dt><dd>back out one layer</dd>
+        </dl>
+      </section>
+      <section>
+        <h3>the current GIF</h3>
+        <dl>
+          <dt><kbd>Enter</kbd> <kbd>c</kbd></dt><dd>copy it</dd>
+          <dt><kbd>u</kbd></dt><dd>copy its URL</dd>
+          <dt><kbd>p</kbd></dt><dd>copy its file path</dd>
+          <dt><kbd>t</kbd></dt><dd>edit tags</dd>
+          <dt><kbd>r</kbd></dt><dd>rename</dd>
+          <dt><kbd>e</kbd></dt><dd>describe with Claude</dd>
+          <dt><kbd>x</kbd></dt><dd>move to trash</dd>
+        </dl>
+      </section>
+      <section>
+        <h3>the library</h3>
+        <dl>
+          <dt><kbd>/</kbd></dt><dd>search</dd>
+          <dt><kbd>a</kbd></dt><dd>add GIFs</dd>
+          <dt><kbd>g</kbd></dt><dd>grab a URL</dd>
+          <dt><kbd>s</kbd></dt><dd>change sort</dd>
+          <dt><kbd>R</kbd></dt><dd>rescan the folder</dd>
+          <dt><kbd>?</kbd></dt><dd>this list</dd>
+        </dl>
+      </section>
+    </div>
+    <p class="helpfoot">keys act on the selected GIF, or whatever you're pointing at</p>
+  </div>
 </div>
 
 <div id="drop" class="drop" hidden><span>drop GIFs to add</span></div>

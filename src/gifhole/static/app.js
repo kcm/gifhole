@@ -84,14 +84,16 @@ async function copyFileViaServer(gif) {
   return "copied the GIF file, animation intact";
 }
 
-async function handleClick(event, gif, card) {
-  event.preventDefault();
+// One copy path for both mouse and keyboard: a click maps its modifiers to a
+// mode, a shortcut names the mode outright. A keydown counts as a user gesture,
+// so the clipboard write is allowed either way.
+async function copyGif(gif, card, mode = "gif") {
   try {
     let what;
-    if (event.shiftKey) what = await copyText(location.origin + gif.url);
-    else if (event.altKey || event.metaKey) what = await copyText(`${state.root}/${gif.filename}`);
+    if (mode === "url") what = await copyText(location.origin + gif.url);
+    else if (mode === "path") what = await copyText(`${state.root}/${gif.filename}`);
     else if (capabilities.file_clipboard) what = await copyFileViaServer(gif);
-    else what = await copyImage(gif, card.querySelector('img'));
+    else what = await copyImage(gif, card.querySelector("img"));
     toast(what);
     card.classList.add("flash");
     setTimeout(() => card.classList.remove("flash"), 500);
@@ -99,6 +101,22 @@ async function handleClick(event, gif, card) {
   } catch (err) {
     toast(`copy failed: ${err.message}`);
   }
+}
+
+function handleClick(event, gif, card) {
+  event.preventDefault();
+  const mode = event.shiftKey ? "url" : event.altKey || event.metaKey ? "path" : "gif";
+  return copyGif(gif, card, mode);
+}
+
+// Selecting the contents of a contenteditable, so rename starts ready to type
+// over rather than with a caret parked at one end.
+function selectAll(node) {
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  const selection = getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
 }
 
 // ---------------------------------------------------------------- rendering
@@ -168,7 +186,13 @@ function card(gif) {
     load();
   });
 
-  el.querySelector("figure").addEventListener("click", (e) => handleClick(e, gif, el));
+  el.querySelector("figure").addEventListener("click", (e) => {
+    // Clicking also moves the keyboard selection, so mouse and keyboard never
+    // disagree about which GIF is "current".
+    selectedId = gif.id;
+    paintSelection();
+    handleClick(e, gif, el);
+  });
   return el;
 }
 
@@ -410,8 +434,53 @@ function renderTags() {
   );
 }
 
+// ------------------------------------------------------------------ selection
+
+// Tracked by id rather than by index: a render can reorder or filter the wall,
+// and the selection should follow the GIF, not the position.
+let selectedId = null;
+
+const selectedIndex = () => state.gifs.findIndex((g) => g.id === selectedId);
+
+function paintSelection() {
+  [...grid.children].forEach((el, i) =>
+    el.classList.toggle("selected", state.gifs[i]?.id === selectedId),
+  );
+}
+
+function select(i) {
+  if (!state.gifs.length) return;
+  const clamped = Math.max(0, Math.min(i, state.gifs.length - 1));
+  selectedId = state.gifs[clamped].id;
+  paintSelection();
+  grid.children[clamped]?.scrollIntoView({ block: "nearest" });
+}
+
+function move(delta) {
+  const i = selectedIndex();
+  select(i < 0 ? 0 : i + delta);
+}
+
+// The grid is auto-fill, so the column count changes with the window; read it
+// back rather than assuming, or vertical movement drifts at other widths.
+const columnCount = () =>
+  getComputedStyle(grid).gridTemplateColumns.split(" ").filter(Boolean).length || 1;
+
+// Keyboard actions apply to the selected card, falling back to whatever the
+// pointer is over, so both habits work without a mode switch.
+function targetCard() {
+  const i = selectedIndex();
+  if (i >= 0) return { gif: state.gifs[i], el: grid.children[i] };
+  if (hoveredCard) {
+    const j = [...grid.children].indexOf(hoveredCard);
+    if (j >= 0) return { gif: state.gifs[j], el: hoveredCard };
+  }
+  return null;
+}
+
 function render() {
   grid.replaceChildren(...state.gifs.map(card));
+  paintSelection();
   empty.hidden = state.gifs.length > 0;
   empty.textContent = state.gifs.length
     ? ""
@@ -752,12 +821,13 @@ $("#file").addEventListener("change", (e) => upload(e.target.files));
   const isMac = /mac|iphone|ipad|ipod/i.test(
     navigator.userAgentData?.platform || navigator.platform || navigator.userAgent,
   );
-  const hintEl = document.querySelector(".hint");
+  // Only the modifier wording is rebuilt; the help button next to it is markup,
+  // so setting textContent on the whole line would delete it.
+  const hintEl = document.querySelector(".hinttext");
   if (hintEl) {
     hintEl.textContent =
       `click copies the image · shift-click copies the URL · ` +
-      `${isMac ? "option" : "alt"}-click copies the file path · ` +
-      `press t to tag whatever you're pointing at`;
+      `${isMac ? "option" : "alt"}-click copies the file path`;
   }
 }
 $("#rescan").addEventListener("click", async () => {
@@ -865,23 +935,103 @@ const isTyping = (node) =>
   node instanceof HTMLElement &&
   (node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.isContentEditable);
 
+const help = $("#help");
+const closeHelp = () => (help.hidden = true);
+const toggleHelp = () => (help.hidden = !help.hidden);
+$("#helpbtn").addEventListener("click", toggleHelp);
+
+// Acting on the current GIF. Where a button already exists these go through it
+// rather than around it, so the confirm on delete and the disabled state on
+// describe keep applying.
+const CARD_KEYS = {
+  c: (t) => copyGif(t.gif, t.el, "gif"),
+  Enter: (t) => copyGif(t.gif, t.el, "gif"),
+  u: (t) => copyGif(t.gif, t.el, "url"),
+  p: (t) => copyGif(t.gif, t.el, "path"),
+  t: (t) => t.el.querySelector(".taginput").focus(),
+  r: (t) => {
+    const name = t.el.querySelector(".name");
+    name.focus();
+    selectAll(name);
+  },
+  e: (t) => t.el.querySelector(".describe").click(),
+  x: (t) => t.el.querySelector(".del").click(),
+  Delete: (t) => t.el.querySelector(".del").click(),
+};
+
 addEventListener("keydown", (e) => {
   const typing = isTyping(e.target);
+
+  // Escape backs out one layer at a time rather than resetting everything, so
+  // leaving a suggestion list doesn't also wipe the search you were refining.
   if (e.key === "Escape") {
+    if (!help.hidden) return closeHelp();
     if (!picker.hidden) return closePicker();
-    if (typing) return;
-    search.value = ""; activeTags.clear(); load(); search.blur();
+    if (typing) return; // fields handle their own Escape
+    if (selectedId !== null) {
+      selectedId = null;
+      return paintSelection();
+    }
+    search.value = "";
+    activeTags.clear();
+    load();
+    search.blur();
     return;
   }
-  // Every other shortcut is a plain letter, so it must not fire mid-word in a
-  // tag field, a rename, or the search box.
-  if (typing) return;
-  if (e.key === "/") { e.preventDefault(); search.focus(); }
-  if (e.key === "t" && hoveredCard) {
+
+  // Shortcuts are bare letters, so they must not fire mid-word in a tag field,
+  // a rename or the search box. Modified keys belong to the browser.
+  if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+
+  // "?" is shift+/ on most layouts, so it has to be tested before "/".
+  if (e.key === "?") {
     e.preventDefault();
-    hoveredCard.querySelector(".taginput")?.focus();
+    return toggleHelp();
   }
+  if (e.key === "/") {
+    e.preventDefault();
+    return search.focus();
+  }
+
+  const cols = columnCount();
+  const step = { j: cols, ArrowDown: cols, k: -cols, ArrowUp: -cols,
+                 l: 1, ArrowRight: 1, h: -1, ArrowLeft: -1 }[e.key];
+  if (step !== undefined) {
+    e.preventDefault();
+    return move(step);
+  }
+  if (e.key === "Home") {
+    e.preventDefault();
+    return select(0);
+  }
+  if (e.key === "End") {
+    e.preventDefault();
+    return select(state.gifs.length - 1);
+  }
+
+  // Library-wide actions reuse the toolbar buttons, so there is one
+  // implementation of each and the shortcut can never drift from the click.
+  const button = { a: "#add", g: "#grab", R: "#rescan" }[e.key];
+  if (button) {
+    e.preventDefault();
+    return $(button).click();
+  }
+  if (e.key === "s") {
+    e.preventDefault();
+    sortSel.selectedIndex = (sortSel.selectedIndex + 1) % sortSel.options.length;
+    sortSel.dispatchEvent(new Event("change"));
+    return;
+  }
+
+  const action = CARD_KEYS[e.key];
+  if (!action) return;
+  const target = targetCard();
+  if (!target) return;
+  e.preventDefault();
+  action(target);
 });
+
+help.addEventListener("click", closeHelp);
 
 load();
 pollJobs();

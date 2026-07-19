@@ -131,6 +131,23 @@ Deletes move files to `.trash/`, they do not unlink. Preserve that.
   Rendering before it resolves greys out a working button.
 - ffmpeg conversion uses `scale='min(W,iw)'`, capping and never upscaling. Forcing
   a small clip up to a fixed width multiplied file size ~2x for zero gain.
+- **Shortcuts are bare letters, so the typing guard is load-bearing.** The
+  global keydown handler returns early when `isTyping(e.target)` or a modifier
+  is held; without that, `j` lands in the search box instead of moving. For the
+  same reason `#search` must not carry `autofocus`: it would swallow every
+  shortcut on load, including the `?` the hint advertises.
+- **Library-wide shortcuts click the real toolbar button** (`a`, `g`, `R`)
+  rather than reimplementing it, so a shortcut can never drift from what the
+  button does. Card actions do the same for delete and describe, which is how
+  the confirm and the disabled state keep applying.
+- **Selection is tracked by id, not index** (`selectedId`). A render can filter
+  or reorder the wall, and the selection has to follow the GIF; an index would
+  silently point at a different one. `targetCard()` falls back to the hovered
+  card so mouse and keyboard habits coexist, and a selection pointing at a
+  deleted GIF degrades to "nothing selected" rather than throwing.
+- **Vertical movement reads the live column count** from
+  `grid-template-columns`. The grid is `auto-fill`, so a hardcoded width makes
+  `j` drift at every window size but the one it was written for.
 - **Tagging is the primary filing mechanism; keep it cheap.** The chip input in
   `tagEditor()` is built around that: the field is always open (no click to
   reveal), a commit leaves it focused for the next tag, and **nothing in the

@@ -274,6 +274,95 @@ button.primary {
   border-color: var(--link-hot);
 }
 
+/* Outline rather than border: it sits outside the box, so selecting a card
+   never nudges the grid. */
+.card.selected {
+  outline: 2px solid var(--link);
+  outline-offset: 1px;
+}
+
+/* -- keyboard help --------------------------------------------------------- */
+
+.help {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--scrim);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.helpbox {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 25%);
+  padding: 18px 22px;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: auto;
+  color: var(--panel-ink);
+}
+
+.helpbox h2 {
+  margin: 0 0 12px;
+  font: var(--font-head);
+  font-size: 22px;
+  color: var(--head-color);
+}
+
+.helpcols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 34px;
+  align-items: start;
+}
+
+.helpbox h3 {
+  margin: 0 0 6px;
+  font: inherit;
+  font-size: 12px;
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  color: var(--panel-muted);
+}
+
+.helpbox dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.helpbox dt {
+  white-space: nowrap;
+}
+
+.helpbox dd {
+  margin: 0;
+  color: var(--panel-muted);
+}
+
+.helpbox kbd {
+  font: inherit;
+  font-size: 12px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0 5px;
+  background: var(--paper);
+  color: var(--panel-ink);
+}
+
+.helpfoot {
+  margin: 14px 0 0;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--panel-muted);
+}
+
 .card figure {
   margin: 0;
   aspect-ratio: 4 / 3;
@@ -451,6 +540,7 @@ button.primary {
   font-size: 10px;
 }
 
+.linkish,
 .card .del,
 .card .describe {
   background: none;
@@ -463,9 +553,16 @@ button.primary {
   font-size: 12px;
 }
 
+.linkish:hover,
 .card .del:hover,
 .card .describe:hover {
   color: var(--link-hot);
+}
+
+/* Sits in the italic hint line, so it has to inherit that rather than the
+   button defaults it just opted out of. */
+.linkish {
+  font-style: italic;
 }
 
 .card .del {

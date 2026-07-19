@@ -19,13 +19,37 @@ it somewhere else with `--root ~/Pictures/gifs`.
 - **drag GIFs onto the window** (or press *Add GIFs*) to add them
 - **paste a URL**, or press *Grab URL* and type one, to download from a `.gif`
   link or scrape a page. Giphy, Tenor, Reddit, and Imgur included
-- **`/`** focuses search, **Esc** clears search and tag filters
 - click a name to rename it
+- **press `?`** for the full keyboard map, or click *keyboard shortcuts*
 - pick a **skin** from the footer: memepool, fark, zombo, webvan, pets.com,
   altavista, or a straight-faced linkedin; your choice is remembered
 
 Dropping files into the `gifs/` folder by hand works too; press *Rescan* to
 pick them up.
+
+## Keyboard
+
+Everything is reachable without the mouse. `?` shows this list in the app.
+
+```
+h j k l   move between GIFs      Enter c  copy the current GIF
+← ↓ ↑ →   the same               u        copy its URL
+Home End  first, last            p        copy its file path
+Esc       back out one layer     t        edit tags
+                                 r        rename
+/   search        s  change sort e        describe with Claude
+a   add GIFs      R  rescan      x        move to trash
+g   grab a URL    ?  this list
+```
+
+Keys act on the **selected** GIF (outlined), falling back to whatever the
+pointer is over, so keyboard and mouse habits both work without a mode switch.
+Movement follows the grid, so `j` drops a whole row however wide the window is.
+`Esc` backs out one layer at a time: suggestions, then the field, then the
+selection, then search and tag filters.
+
+The search box is deliberately **not** focused on load, or it would swallow
+every shortcut. `/` is one keystroke away.
 
 ## Tagging
 
