@@ -565,29 +565,27 @@ function actionIds() {
 
 async function trashIds(ids) {
   if (!ids.length) return;
-  const res = await fetch("/api/gifs/delete", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ids }),
-  });
-  const out = await res.json();
-  lastTrashed = out.trashed || [];
-  clearMarks();
-  toast(`moved ${out.removed} to trash · press z to undo`);
-  load();
+  try {
+    const out = await postJSON("/api/gifs/delete", { ids });
+    lastTrashed = out.trashed || [];
+    clearMarks();
+    toast(`moved ${out.removed} to trash · press z to undo`);
+    load();
+  } catch (err) {
+    toast(`delete failed: ${err.message}`);
+  }
 }
 
 async function undoTrash() {
   if (!lastTrashed.length) return toast("nothing to undo");
-  const res = await fetch("/api/trash/restore", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ names: lastTrashed }),
-  });
-  const out = await res.json();
-  lastTrashed = [];
-  toast(`restored ${out.restored.length}`);
-  load();
+  try {
+    const out = await postJSON("/api/trash/restore", { names: lastTrashed });
+    lastTrashed = [];
+    toast(`restored ${out.restored.length}`);
+    load();
+  } catch (err) {
+    toast(`undo failed: ${err.message}`);
+  }
 }
 
 function render() {
@@ -1055,7 +1053,16 @@ const trashList = $("#trashlist");
 const closeTrash = () => (trashPanel.hidden = true);
 
 async function openTrash() {
-  const data = await (await fetch("/api/trash")).json();
+  let data;
+  try {
+    const res = await fetch("/api/trash");
+    if (!res.ok) throw new Error(res.status);
+    data = await res.json();
+  } catch {
+    // Say so rather than showing a convincing but false "the trash is empty".
+    toast("could not read the trash. Is the server running the current code?");
+    return;
+  }
   const entries = data.entries || [];
   $("#trashcount").textContent = entries.length
     ? `${entries.length} in the trash`
@@ -1077,7 +1084,11 @@ async function openTrash() {
       put.className = "linkish";
       put.textContent = "restore";
       put.addEventListener("click", async () => {
-        await postJSON("/api/trash/restore", { names: [entry.name] });
+        try {
+          await postJSON("/api/trash/restore", { names: [entry.name] });
+        } catch (err) {
+          return toast(`restore failed: ${err.message}`);
+        }
         toast(`restored ${entry.filename}`);
         openTrash();
         load();
@@ -1087,7 +1098,11 @@ async function openTrash() {
       gone.textContent = "delete";
       gone.addEventListener("click", async () => {
         if (!confirm(`Delete ${entry.filename} for good? This cannot be undone.`)) return;
-        await postJSON("/api/trash/purge", { names: [entry.name] });
+        try {
+          await postJSON("/api/trash/purge", { names: [entry.name] });
+        } catch (err) {
+          return toast(`delete failed: ${err.message}`);
+        }
         openTrash();
       });
       row.append(name, when, put, gone);
@@ -1108,12 +1123,30 @@ function agoOf(seconds) {
   return `${Math.round(mins / 1440)} d ago`;
 }
 
-const postJSON = (url, body) =>
-  fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  }).then((r) => r.json());
+// Throws on a non-OK response instead of handing back the error body as if it
+// were data. A server running older code answers new routes with 404 or 405,
+// and quietly reading that as "nothing to do" is exactly how a live-looking
+// button does nothing at all.
+async function postJSON(url, body) {
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error("gifhole's server is not responding. Is it still running?");
+  }
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    if (res.status === 404 || res.status === 405) {
+      throw new Error(`this needs a newer server than the one running. Restart gifhole`);
+    }
+    throw new Error(detail?.detail || `server said ${res.status}`);
+  }
+  return res.json();
+}
 
 $("#trashbtn").addEventListener("click", openTrash);
 $("#trashclose").addEventListener("click", closeTrash);
@@ -1121,7 +1154,12 @@ $("#trashempty").addEventListener("click", async () => {
   // Everything else in gifhole is recoverable; this is the one place that
   // isn't, so it asks plainly and says so.
   if (!confirm("Delete everything in the trash for good? This cannot be undone.")) return;
-  const out = await postJSON("/api/trash/purge", { all: true });
+  let out;
+  try {
+    out = await postJSON("/api/trash/purge", { all: true });
+  } catch (err) {
+    return toast(`could not empty the trash: ${err.message}`);
+  }
   lastTrashed = [];
   toast(`deleted ${out.purged} for good`);
   openTrash();
@@ -1164,7 +1202,12 @@ $("#clearall").addEventListener("click", async () => {
   const total = state.gifs.length;
   if (!total) return toast("nothing to clear");
   if (!confirm(`Move all ${total} GIFs to the trash? You can restore them from there.`)) return;
-  const out = await postJSON("/api/gifs/clear", { confirm: "clear" });
+  let out;
+  try {
+    out = await postJSON("/api/gifs/clear", { confirm: "clear" });
+  } catch (err) {
+    return toast(`could not clear the library: ${err.message}`);
+  }
   lastTrashed = out.trashed || [];
   clearMarks();
   toast(`moved ${out.removed} to trash · press z to undo`);
