@@ -1,0 +1,47 @@
+[project]
+name = "gifhole"
+version = "0.1.0"
+description = "A local GIF library with click-to-copy"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.12",
+    "pillow>=11.0",
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    # Apple Vision OCR. macOS-only; gifhole degrades to no-OCR without it.
+    "pyobjc-framework-Vision>=12.2; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=12.2; sys_platform == 'darwin'",
+]
+
+[project.optional-dependencies]
+# Claude-powered descriptions and meme identification. Never required.
+enrich = ["anthropic>=0.69"]
+
+[project.scripts]
+gifhole = "gifhole.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gifhole"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

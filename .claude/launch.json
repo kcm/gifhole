@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "gifhole",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "gifhole", "--port", "8777", "--no-open"],
+      "port": 8777
+    }
+  ]
+}

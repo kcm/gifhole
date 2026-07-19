@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gifhole</title>
+<script>
+  // gifhole is a client-server app: its CSS, JS, and API all load by absolute
+  // path from the FastAPI server's root. Opened directly (file://) there is no
+  // server, so nothing loads. Replace the broken page with how to run it, rather
+  // than leaving an unstyled, dead screen. Inline so it runs without /static/*.
+  if (location.protocol === "file:") {
+    addEventListener("DOMContentLoaded", function () {
+      // Name the directory this file actually lives in rather than guessing.
+      // In a source tree the path ends .../src/gifhole/static/index.html, so
+      // trimming that suffix gives the project root. If the layout isn't
+      // recognised we omit the `cd` rather than print a path that's wrong.
+      var path = decodeURIComponent(location.pathname);
+      var suffix = "/src/gifhole/static/index.html";
+      var dir = path.slice(-suffix.length) === suffix ? path.slice(0, -suffix.length) : "";
+      var cd = dir ? "cd " + dir + "\n" : "";
+      var esc = function (s) {
+        return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      };
+      document.body.innerHTML =
+        '<div style="font:16px/1.6 ui-monospace,Menlo,monospace;max-width:38em;' +
+        'margin:14vh auto;padding:0 6vw;color:#1a1a1a">' +
+        "<h1 style=\"font:700 26px/1.2 Georgia,serif\">gifhole needs its server</h1>" +
+        "<p>You opened this file directly. Start the server:</p>" +
+        '<pre style="background:#f4f1e4;border:1px solid #c9c2ad;padding:12px 14px;' +
+        'overflow:auto">' + esc(cd) + "uv run gifhole</pre>" +
+        '<p>Then open <a href="http://127.0.0.1:8777/">http://127.0.0.1:8777/</a>.</p></div>';
+    });
+  }
+</script>
+<link rel="stylesheet" href="/static/style.css">
+<script>
+  // Set the theme before first paint so the skin never flashes.
+  try {
+    document.documentElement.dataset.theme =
+      localStorage.getItem("gifhole-theme") || "memepool";
+  } catch (e) {
+    document.documentElement.dataset.theme = "memepool";
+  }
+</script>
+</head>
+<body>
+<header>
+  <div class="masthead">
+    <h1>gifhole</h1>
+    <p class="tagline">a small pile of animated GIFs, kept close at hand</p>
+  </div>
+  <hr>
+  <div class="bar">
+    <input id="search" type="search" placeholder="search name or tag" autocomplete="off" autofocus>
+    <select id="sort" title="sort order">
+      <option value="added">newest</option>
+      <option value="name">name</option>
+      <option value="copies">most copied</option>
+    </select>
+    <button id="add" class="primary">Add GIFs</button>
+    <button id="grab" title="download from a GIF link or scrape a page">Grab URL</button>
+    <button id="rescan" title="pick up files added to the folder by hand">Rescan</button>
+    <input id="graburl" type="url" placeholder="paste a GIF or page URL, Enter to fetch" hidden>
+    <!-- Visually hidden rather than display:none: some browsers won't open a
+         file picker for a display:none input. -->
+    <input id="file" type="file" accept="image/gif" multiple class="visually-hidden">
+  </div>
+  <div id="tags" class="tags"></div>
+  <p class="hint">
+    click copies the image &middot; shift-click copies the URL &middot; alt-click copies the file path
+  </p>
+  <div id="jobs" class="jobs" hidden></div>
+  <hr>
+</header>
+
+<main id="grid" class="grid"></main>
+<p id="empty" class="empty" hidden></p>
+
+<div id="picker" class="picker" hidden>
+  <div class="picker-bar">
+    <span id="pickcount" class="pickcount"></span>
+    <button id="pickall">select all</button>
+    <button id="picknone">select none</button>
+    <span class="picker-spacer"></span>
+    <button id="pickgo" class="primary">Import</button>
+    <button id="pickcancel">Cancel</button>
+  </div>
+  <div id="pickgrid" class="pickgrid"></div>
+</div>
+
+<div id="drop" class="drop" hidden><span>drop GIFs to add</span></div>
+<div id="toast" class="toast" hidden></div>
+
+<footer>
+  <span class="skinlabel">skin</span>
+  <select id="theme" title="skin">
+    <option value="memepool">memepool</option>
+    <option value="fark">fark</option>
+    <option value="zombo">zombo</option>
+    <option value="webvan">webvan</option>
+    <option value="petsdotcom">pets.com</option>
+    <option value="altavista">altavista</option>
+    <option value="linkedin">linkedin</option>
+  </select>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
