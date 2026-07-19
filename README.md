@@ -145,6 +145,10 @@ carries an always-open field: click it, or hover the card and press **`t`**.
 - **backspace** on an empty field removes the last tag; each tag also has an
   **x**
 - **click a tag** on a card to see everything else filed under it
+- type **`untagged`** in the search box to see what still needs filing, plus
+  `undescribed` and `untitled`. They combine with ordinary words and with each
+  other: `untagged cat` means no tags *and* mentions cat. Borrowed from
+  [gifdex](https://github.com/aphyr/gifdex)
 
 Nothing here reloads the page, so you can work down a wall of GIFs without
 losing your place. Tag counts in the header update as you go.

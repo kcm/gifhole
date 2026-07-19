@@ -305,3 +305,39 @@ def test_move_refuses_to_move_onto_itself(store):
     with pytest.raises(ValueError, match="already is"):
         move_library(store.root, store.root)
     assert store.root.exists()
+
+
+# -- filter words ------------------------------------------------------------
+
+
+def test_untagged_finds_only_gifs_without_tags(store):
+    """Filing needs a way to see what is left, and the library panel's counts
+    are not something you can type into the search box."""
+    store.add_bytes("bare.gif", make_textured_gif(60))
+    store.add_bytes("filed.gif", make_textured_gif(61), tags="cat")
+    assert [g.filename for g in store.list_gifs("untagged")] == ["bare.gif"]
+
+
+def test_undescribed_and_untitled(store):
+    a = store.add_bytes("plain.gif", make_textured_gif(62))
+    b = store.add_bytes("written.gif", make_textured_gif(63))
+    store.update(b.id, description="a dog gives up", title="Giving Up")
+    assert [g.filename for g in store.list_gifs("undescribed")] == ["plain.gif"]
+    assert [g.filename for g in store.list_gifs("untitled")] == ["plain.gif"]
+    assert a.id  # the untouched one is the match, by construction
+
+
+def test_a_filter_word_combines_with_ordinary_search(store):
+    """ "untagged cat" means has no tags AND mentions cat."""
+    store.add_bytes("cat-bare.gif", make_textured_gif(64))
+    store.add_bytes("dog-bare.gif", make_textured_gif(65))
+    store.add_bytes("cat-filed.gif", make_textured_gif(66), tags="animals")
+    assert [g.filename for g in store.list_gifs("untagged cat")] == ["cat-bare.gif"]
+
+
+def test_filter_words_can_be_combined(store):
+    store.add_bytes("nothing.gif", make_textured_gif(67))
+    tagged = store.add_bytes("something.gif", make_textured_gif(68), tags="cat")
+    store.update(tagged.id, description="described")
+    found = [g.filename for g in store.list_gifs("untagged undescribed")]
+    assert found == ["nothing.gif"]

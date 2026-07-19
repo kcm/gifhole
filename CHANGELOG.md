@@ -46,6 +46,9 @@ losing anything. Anything that would break that is a major change.
 
 ### Added
 
+- Search filter words `untagged`, `undescribed` and `untitled`, which combine
+  with ordinary search terms. Filing needs a way to see what is left, and a
+  count in a panel is not something you can type. Idea borrowed from gifdex.
 - **Bookmarklet** offered from the library panel: drag it to the bookmarks
   bar, press it on any page with GIFs, and gifhole opens ready to import. It
   sends both what it finds in the rendered page and the page's address, and

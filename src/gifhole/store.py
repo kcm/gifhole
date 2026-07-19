@@ -92,6 +92,17 @@ def safe_filename(name: str) -> str:
     return f"{stem or 'gif'}.gif"
 
 
+# Search words that ask a question about a GIF rather than matching its text.
+# Borrowed from gifdex, which has "untagged"; the filing-oriented counterpart
+# is worth having too. A GIF literally tagged "untagged" is not findable by
+# that word any more, which is a fair trade for the shortcut.
+FILTERS = {
+    "untagged": lambda gif: not gif.tags,
+    "undescribed": lambda gif: not gif.description.strip(),
+    "untitled": lambda gif: not gif.title.strip(),
+}
+
+
 def split_tags(raw: str) -> list[str]:
     return [t for t in (part.strip().lower() for part in raw.replace(",", " ").split()) if t]
 
@@ -189,7 +200,11 @@ class Store:
         terms = split_tags(query)
         if not terms:
             return gifs
-        return [g for g in gifs if _matches(g, terms)]
+        # Split the query into questions and plain text, so "untagged cat"
+        # means "has no tags, and mentions cat somewhere".
+        checks = [FILTERS[t] for t in terms if t in FILTERS]
+        words = [t for t in terms if t not in FILTERS]
+        return [g for g in gifs if all(c(g) for c in checks) and _matches(g, words)]
 
     def get(self, gif_id: int) -> Gif | None:
         row = self.db.execute("SELECT * FROM gifs WHERE id = ?", (gif_id,)).fetchone()
