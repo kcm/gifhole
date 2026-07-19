@@ -24,10 +24,20 @@ def sample_frames(path: Path, count: int = 3) -> list[Image.Image]:
         total = getattr(img, "n_frames", 1)
         if total <= 1:
             return [img.convert("RGB")]
-        # Evenly spaced, skipping the very first frame, which is often a title
-        # card or a mostly-blank fade-in.
-        step = max(total // (count + 1), 1)
-        wanted = sorted({min((i + 1) * step, total - 1) for i in range(count)})
+        # Spread across the whole animation, from just after the start to the
+        # last frame. Skipping frame 0 is deliberate: it is often a title card
+        # or a mostly-blank fade-in.
+        #
+        # The previous spacing put the final sample at count/(count+1) of the
+        # way through, so with the default of three the last quarter was never
+        # looked at, and a caption that only appears at the end was invisible
+        # to both OCR and Claude. Punchlines land at the end.
+        first, last = min(1, total - 1), total - 1
+        if count <= 1:
+            wanted = [last]
+        else:
+            span = last - first
+            wanted = sorted({first + round(i * span / (count - 1)) for i in range(count)})
         out = []
         for index, frame in enumerate(ImageSequence.Iterator(img)):
             if index in wanted:

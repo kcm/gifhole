@@ -262,6 +262,16 @@ docker run --rm -v "$PWD":/src:ro python:3.13-slim sh -c \
   `store.stats()` share one vocabulary of scope names so the number in the
   panel is exactly what will execute. A scoped describe deliberately ignores
   `enriched_at`: "all" means all, and that is how a redo is requested.
+- **Sampled frames must span the whole animation.** `sample_frames()` skips
+  frame 0 (title cards, fade-ins) but must reach the last frame: an earlier
+  spacing stopped at `count/(count+1)` of the way through, so the final quarter
+  was never seen and end-of-clip captions were invisible to OCR and to Claude.
+  Punchlines land at the end.
+- **Vision is preferred over Tesseract for a real reason.** Meme text is warped
+  and stylised over busy pictures, near the worst case for classical OCR.
+  FindThatMeme ran a rack of second-hand iPhones at 17M memes rather than use
+  Tesseract for this. Tesseract is the fallback that keeps the feature working
+  off macOS, not an equivalent.
 - **Auto-tagging is only useful if the vocabulary stays small.** `build_schema()`
   pins `known_tags` to an `enum` of the library's existing tags, so structured
   output makes an off-vocabulary tag impossible rather than merely discouraged;

@@ -7,6 +7,7 @@ text through the store, which is the contract the rest of the app relies on.
 import io
 import pathlib
 import sys
+import tempfile
 import threading
 import time
 
@@ -485,3 +486,37 @@ def test_clipboard_says_what_is_needed_when_there_is_nothing(monkeypatch, tmp_pa
     monkeypatch.setattr(clipboard, "_linux_tool", lambda: None)
     with pytest.raises(RuntimeError, match="wl-copy/xclip"):
         clipboard.copy_file(gif)
+
+
+def test_frame_sampling_reaches_the_end_of_the_animation():
+    """A caption that only appears at the end used to be invisible: the old
+    spacing put the last sample at count/(count+1) of the way through, so with
+    the default of three the final quarter was never looked at. Punchlines
+    land at the end."""
+    from gifhole.frames import sample_frames
+
+    data = make_animated_gif(frames=40)
+    path = pathlib.Path(tempfile.mkdtemp()) / "long.gif"
+    path.write_bytes(data)
+    frames = sample_frames(path, 3)
+    assert len(frames) == 3
+
+    # Assert on the indices, which is the property that broke, not on pixels.
+    import PIL.Image
+
+    with PIL.Image.open(path) as img:
+        total = img.n_frames
+    first, last = 1, total - 1
+    expected = sorted({first + round(i * (last - first) / 2) for i in range(3)})
+    assert expected[-1] == total - 1, "the final frame must be sampled"
+    assert expected[0] <= 1, "and the start, just past any title card"
+
+
+def test_frame_sampling_still_skips_the_title_card():
+    """Frame 0 is often a fade-in or a blank card; sampling it would waste one
+    of very few looks."""
+    from gifhole.frames import sample_frames
+
+    path = pathlib.Path(tempfile.mkdtemp()) / "short.gif"
+    path.write_bytes(make_animated_gif(frames=6))
+    assert len(sample_frames(path, 3)) == 3

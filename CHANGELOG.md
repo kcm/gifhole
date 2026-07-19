@@ -24,6 +24,10 @@ losing anything. Anything that would break that is a major change.
 
 ### Fixed
 
+- Frame sampling now reaches the end of an animation. The spacing put the last
+  sample at `count/(count+1)` of the way through, so with the default of three
+  the final quarter was never examined and a caption appearing only at the end
+  was invisible to both OCR and Claude.
 - OCR-gated code paths are tested against the function the app actually gates
   on. A rename left one test patching a helper nothing called, so it passed on
   macOS because Vision was genuinely present and failed wherever the stub was

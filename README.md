@@ -159,13 +159,22 @@ Every added GIF is scanned for **burned-in text**, so searching `nope` finds
 the GIF with NOPE across it even if you never tagged it. It runs automatically
 in the background, needs no key and no network, and the header shows progress.
 
-Two engines. **macOS Vision** where it exists, which is noticeably better on
-heavy display faces with a stroke over a busy background. **Tesseract**
-everywhere else (`apt install tesseract-ocr`, already in the Docker image),
-which is what makes this work on Linux rather than the feature simply being
-absent. Tesseract is less exact: on a test caption Vision returned
-`NOPE NOT TODAY` and Tesseract `NOPE'NOT TODAY`. Search is substring-based, so
-both still match `nope`, `not` and `today`.
+Two engines. **macOS Vision** where it exists, and **Tesseract** everywhere
+else (`apt install tesseract-ocr`, already in the Docker image).
+
+**Vision is substantially better at this, and the gap is the whole reason it is
+preferred.** Meme text is warped, stylised, and laid over busy pictures, which
+is close to the worst case for a classical OCR engine. On a clean test caption
+Vision returned `NOPE NOT TODAY` where Tesseract gave `NOPE'NOT TODAY`; on real
+memes expect Tesseract to do noticeably worse than that, not better.
+[FindThatMeme](https://findthatmeme.com/blog/2023/01/08/image-stacks-and-iphone-racks-building-an-internet-scale-meme-search-engine-Qzrz7V6T.html)
+hit the same wall at seventeen million memes and ended up running a physical
+rack of second-hand iPhones to get at Vision, which is a strong signal about
+the size of the difference.
+
+So: Tesseract makes burned-in text searchable on Linux rather than the feature
+being absent, and search is substring-based so partial reads still match. Treat
+it as a fallback, not a replacement.
 
 For descriptions and meme identification, press **describe** on a card. That
 sends a few frames to Claude and comes back with a one-line description, the
@@ -439,6 +448,9 @@ is a reasonable thing to pick up; none is load-bearing for the rest.
   Tesseract, and the clipboard was verified against a virtual X display.
   **Windows is untested.** The browser side has only been exercised in Chrome
   on macOS.
+- **Tesseract's real-world accuracy on memes is unmeasured here.** It was
+  tested on clean synthetic captions, not on the warped, stylised text it is
+  worst at. Assume it is meaningfully behind Vision.
 - **The Linux clipboard is verified only as far as the clipboard.** The right
   `text/uri-list` lands on it; whether your particular chat client turns that
   into a file upload has not been tested end to end.
