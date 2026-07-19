@@ -108,17 +108,23 @@ def tracked_text_files() -> list[Path]:
     return [REPO / f for f in out if Path(f).suffix in TEXT_SUFFIXES]
 
 
+# Written as escapes, not as the characters themselves. This file is scanned
+# like every other tracked file, so spelling them literally would make the
+# check fail on its own source. It did, on the first CI run.
+DASHES = ("\u2014", "\u2013")
+
+
 def test_no_em_or_en_dashes_anywhere():
     """A standing style rule, enforced rather than remembered.
 
-    Generated text is the reason this is mechanical: a model wrote an em-dash
-    into a description here, and prose review is exactly the thing that gets
-    skipped when the diff is large.
+    Generated text is the reason this is mechanical: a model wrote one into a
+    description here, and prose review is the first thing skipped on a large
+    diff.
     """
     offenders = []
     for path in tracked_text_files():
         for number, line in enumerate(path.read_text(errors="ignore").splitlines(), 1):
-            if "—" in line or "–" in line:
+            if any(d in line for d in DASHES):
                 offenders.append(f"{path.relative_to(REPO)}:{number}: {line.strip()[:70]}")
     assert not offenders, "em/en dashes found:\n" + "\n".join(offenders[:15])
 
