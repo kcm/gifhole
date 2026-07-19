@@ -159,7 +159,12 @@ def create_app(root: Path | None = None, *, auto_ocr: bool = True) -> FastAPI:
 
     @app.patch("/api/gifs/{gif_id}")
     async def edit(gif_id: int, payload: dict) -> JSONResponse:
-        gif = store.update(gif_id, title=payload.get("title"), tags=payload.get("tags"))
+        gif = store.update(
+            gif_id,
+            title=payload.get("title"),
+            tags=payload.get("tags"),
+            description=payload.get("description"),
+        )
         if gif is None:
             raise HTTPException(404, "no such gif")
         return JSONResponse(gif.as_dict())

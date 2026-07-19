@@ -230,6 +230,15 @@ stray request cannot empty it.
 - **`.card` clips its children**, so the suggestion list only escapes because
   `.card.tagging` lifts `overflow` and raises `z-index` while a card is being
   tagged. Removing that class hook makes the dropdown a hairline again.
+- **Inline edits save directly, never only via `blur`.** The tag field and the
+  description both commit on Enter and treat blur as a second chance. Blur is
+  not reliable enough to be the only path: the element can lose focus without
+  the handler running and the edit disappears with no sign it was dropped.
+  This has now bitten twice in this codebase.
+- **The job kinds in `pollJobs()` must match what `app.py` submits.** They are
+  matched by string, so renaming a job kind silently stops the grid refreshing
+  when that job lands: renaming `enrich` to `describe` left finished
+  descriptions invisible until a manual reload.
 - **Don't gate features behind native `prompt()`/`alert()`/file dialogs.**
   Embedded and preview contexts silently suppress them, and browsers let users
   permanently disable dialogs, so a button that only calls `prompt()` looks dead.

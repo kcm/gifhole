@@ -141,18 +141,50 @@ function card(gif) {
     </div>
     <div class="ocr">
       <span class="quote"></span>
+      <span class="desc" contenteditable="plaintext-only" spellcheck="false"
+            data-placeholder="add a description"></span>
       <button class="describe" title="describe with Claude">describe</button>
     </div>`;
 
   el.querySelector("img").src = gif.url;
   el.querySelector(".dims").textContent = `${gif.width}x${gif.height}`;
 
-  // OCR text and Claude descriptions are both search keys; show whichever
-  // exists so it's obvious why a GIF matched a query.
+  // Both are search keys, and they answer different questions: the quote is
+  // text burned into the picture, read locally, and is a fact about the file.
+  // The description is prose about it, which Claude may write and you may
+  // rewrite. Showing only one (which this used to do) hid the description
+  // entirely on any GIF with text in it.
   const quote = el.querySelector(".quote");
-  if (gif.ocr_text) quote.textContent = `“${gif.ocr_text}”`;
-  else if (gif.description) quote.textContent = gif.description;
-  else quote.textContent = gif.ocr_at ? "no text found" : "";
+  quote.textContent = gif.ocr_text ? `“${gif.ocr_text}”` : "";
+  quote.hidden = !gif.ocr_text;
+
+  const desc = el.querySelector(".desc");
+  desc.textContent = gif.description;
+  // Saved directly, not by asking blur to do it. Blur is not reliable enough
+  // to be the only path: the element can lose focus without the handler
+  // running, and the edit vanishes with no sign it was dropped. Same reason
+  // the tag field commits on its own.
+  const saveDesc = () => {
+    const text = desc.textContent.trim();
+    if (text === gif.description) return;
+    gif.description = text;
+    patch(gif.id, { description: text });
+  };
+  desc.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      saveDesc();
+      desc.blur();
+      return;
+    }
+    if (e.key === "Escape") {
+      // Put back what was there rather than saving a half-typed edit.
+      e.stopPropagation();
+      desc.textContent = gif.description;
+      desc.blur();
+    }
+  });
+  desc.addEventListener("blur", saveDesc);
 
   const describe = el.querySelector(".describe");
   describe.disabled = !capabilities.enrich;
@@ -1102,7 +1134,10 @@ async function pollJobs() {
   for (const job of body.jobs) {
     const previous = jobStatus.get(job.id);
     if (previous && previous !== job.status && job.status === "done") {
-      if (job.kind === "import" || job.kind === "enrich") landed = true;
+      // Must match the kinds app.py submits. This drifted once already: the
+      // enrich job was renamed to "describe" and this kept testing the old
+      // name, so a finished description never refreshed its card.
+      if (job.kind === "import" || job.kind === "describe") landed = true;
     }
     jobStatus.set(job.id, job.status);
   }

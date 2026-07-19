@@ -214,10 +214,22 @@ class Store:
         return gif
 
     def update(
-        self, gif_id: int, *, title: str | None = None, tags: str | None = None
+        self,
+        gif_id: int,
+        *,
+        title: str | None = None,
+        tags: str | None = None,
+        description: str | None = None,
     ) -> Gif | None:
         if title is not None:
             self.db.execute("UPDATE gifs SET title = ? WHERE id = ?", (title.strip(), gif_id))
+        if description is not None:
+            # Editing by hand does not stamp enriched_at: that marks "Claude has
+            # seen this", and a batch describe should still skip it afterwards
+            # only if Claude actually did.
+            self.db.execute(
+                "UPDATE gifs SET description = ? WHERE id = ?", (description.strip(), gif_id)
+            )
         if tags is not None:
             self.db.execute(
                 "UPDATE gifs SET tags = ? WHERE id = ?", (" ".join(split_tags(tags)), gif_id)

@@ -82,7 +82,9 @@ personal reaction-GIF library.
 Describe it for search: what happens, which recognizable meme it is if any, and \
 how someone would look for it. Prefer the emotion or reaction it conveys \
 ("annoyed", "celebrate", "facepalm") over literal scene description. Do not \
-transcribe on-screen text; that is captured separately.
+transcribe on-screen text; that is captured separately. Write the description \
+in plain prose with no dashes as punctuation: it is stored in the user's own \
+library and they edit it by hand.
 
 Tagging matters more than completeness. Reuse the library's existing tags \
 wherever one fits, even loosely: a library with 30 well-used tags is far more \

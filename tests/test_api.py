@@ -333,3 +333,33 @@ def test_duplicates_endpoint_groups_what_is_already_there(client):
     groups = client.get("/api/duplicates").json()["groups"]
     assert len(groups) == 1
     assert sorted(g["filename"] for g in groups[0]) == ["one.gif", "two.gif"]
+
+
+def test_description_can_be_edited_by_hand(client):
+    gif_id = _add(client, "note.gif")
+    res = client.patch(f"/api/gifs/{gif_id}", json={"description": "  a dog gives up  "})
+    assert res.json()["description"] == "a dog gives up"
+
+
+def test_editing_the_description_does_not_mark_it_as_described(client):
+    """enriched_at means "Claude has seen this", so a batch describe should
+    still pick up a GIF the user merely annotated by hand."""
+    gif_id = _add(client, "hand.gif")
+    client.patch(f"/api/gifs/{gif_id}", json={"description": "mine"})
+    assert client.get("/api/gifs").json()["gifs"][0]["enriched_at"] == 0
+
+
+def test_a_hand_written_description_is_searchable(client):
+    gif_id = _add(client, "find.gif")
+    client.patch(f"/api/gifs/{gif_id}", json={"description": "elephant on a trampoline"})
+    found = client.get("/api/gifs", params={"q": "trampoline"}).json()["gifs"]
+    assert [g["id"] for g in found] == [gif_id]
+
+
+def test_editing_the_description_leaves_tags_and_title_alone(client):
+    gif_id = _add(client, "keep.gif")
+    client.patch(f"/api/gifs/{gif_id}", json={"title": "Keeper", "tags": "cat reaction"})
+    client.patch(f"/api/gifs/{gif_id}", json={"description": "just the description"})
+    gif = client.get("/api/gifs").json()["gifs"][0]
+    assert gif["title"] == "Keeper"
+    assert gif["tags"] == ["cat", "reaction"]

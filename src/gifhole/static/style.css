@@ -762,13 +762,40 @@ button.primary {
   display: flex;
   gap: 6px;
   align-items: baseline;
+  flex-wrap: wrap;
 }
 
+/* Burned-in text, read locally. Not editable: it is a fact about the picture,
+   not a note about it. */
 .ocr .quote {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
+  max-width: 100%;
+}
+
+/* The description, which Claude may write and you may rewrite. */
+.ocr .desc {
+  flex: 1 1 6em;
+  min-width: 0;
+  cursor: text;
+  overflow-wrap: anywhere;
+}
+
+.ocr .desc:empty::before {
+  content: attr(data-placeholder);
+  opacity: 0.65;
+}
+
+.ocr .desc:hover:empty::before {
+  opacity: 1;
+}
+
+.ocr .desc:focus {
+  outline: 1px dotted var(--panel-muted);
+  outline-offset: 2px;
+  font-style: normal;
+  color: var(--panel-ink);
 }
 
 .empty {

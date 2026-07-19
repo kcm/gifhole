@@ -145,7 +145,14 @@ export ANTHROPIC_API_KEY=...     # or use `ant auth login`
 ```
 
 Without it, everything else still works; the *describe* button just stays
-disabled.
+disabled and says why.
+
+Every card carries an editable **description** under the tags, whether or not
+Claude wrote it: click it, type, press Enter. Burned-in text found by OCR is
+shown separately above it, in quotes, and is not editable, because that is a
+fact about the picture rather than a note about it. Both are searchable.
+Editing a description by hand does not mark the GIF as described, so a later
+batch will still offer to describe it.
 
 ### Describing a batch
 
