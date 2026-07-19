@@ -4,15 +4,35 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import threading
 import webbrowser
 from pathlib import Path
 
 import uvicorn
 
+from gifhole import store
 from gifhole.app import create_app, default_root
 
 PACKAGE_DIR = Path(__file__).resolve().parent
+
+
+def move(args) -> int:
+    """Relocate the library. Files only; see store.move_library."""
+    try:
+        destination = store.move_library(args.root, args.destination)
+    except (ValueError, OSError) as exc:
+        print(f"gifhole: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"moved the library to {destination}")
+    # The root is a runtime argument, so nothing now points at the new place.
+    # Saying so beats letting the next launch quietly build an empty library at
+    # the old path.
+    print("\nPoint gifhole at it, or the next run will start an empty library:")
+    print(f"  export GIFHOLE_ROOT={destination}")
+    print(f"  gifhole --root {destination}")
+    return 0
 
 
 def main() -> None:
@@ -24,7 +44,15 @@ def main() -> None:
     parser.add_argument(
         "--reload", action="store_true", help="restart when the source changes (development)"
     )
+    # Optional on purpose: bare `gifhole` still means "serve the library", so
+    # the subparser must not be required.
+    commands = parser.add_subparsers(dest="command")
+    mover = commands.add_parser("move", help="move the library to another directory")
+    mover.add_argument("destination", type=Path, help="where to move it")
     args = parser.parse_args()
+
+    if args.command == "move":
+        raise SystemExit(move(args))
 
     url = f"http://{args.host}:{args.port}/"
     print(f"gifhole  library: {args.root / 'gifs'}\n        serving: {url}")

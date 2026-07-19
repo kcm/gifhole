@@ -24,7 +24,8 @@ it somewhere else with `--root ~/Pictures/gifs`.
   *Grab URL*. Where the drag carries a title, that becomes the filename, since
   every file on Giphy is otherwise called `giphy.gif`
 - **paste a URL**, or press *Grab URL* and type one, to download from a `.gif`
-  link or scrape a page. Giphy, Tenor, Reddit, and Imgur included
+  link or scrape a page. Giphy, Tenor and Reddit work; see
+  [known gaps](#known-gaps) for what doesn't
 - click a name to rename it
 - **press `?`** for the full keyboard map, or click *keyboard shortcuts*
 - pick a **skin** from the footer: memepool, fark, zombo, webvan, pets.com,
@@ -191,8 +192,8 @@ screen** showing every GIF found on it, all ticked, with select all / select
 none, so you keep only what you want. Previews load from the source as you
 scroll, falling back to the server if one fails.
 
-Most sites (Giphy, Tenor, Reddit, Imgur) serve MP4/WebM rather than GIF; those
-are converted with **ffmpeg** if it's installed (`brew install ffmpeg`).
+Most sites (Giphy, Tenor, Reddit) serve MP4/WebM rather than GIF; those are
+converted with **ffmpeg** if it's installed (`brew install ffmpeg`).
 Without ffmpeg, direct GIFs still download and videos are skipped with a note
 rather than failing the batch. The server refuses `file://` and
 private-network addresses.
@@ -219,6 +220,23 @@ gifhole --root DIR    library location   (default ~/.gifhole)
        --no-open     do not open a browser
        --reload      restart on source changes (development)
 ```
+
+## Moving the library
+
+```
+gifhole --root ~/.gifhole move ~/Pictures/gifs
+```
+
+Files only. Nothing in the database is a path (rows store a bare filename and
+the root is given at runtime), so relocating is a directory move rather than a
+migration, and titles, tags, descriptions and the trash all come with it.
+
+It refuses to move onto a non-empty directory, into its own subtree, or out of
+a folder that isn't a library, so a mistyped `--root` can't relocate the wrong
+thing. Afterwards it prints the `GIFHOLE_ROOT` to set, because nothing else
+points at the new location and the next bare run would otherwise start an empty
+library at the old path. **Stop the server first**; moving a library out from
+under a running one is not handled.
 
 ## The library panel
 
@@ -308,6 +326,28 @@ uv run gifhole --reload        # picks up source edits without a restart
 `--reload` watches the package's `.py` files and restarts the server when one
 changes, so you never test against code you already edited. Static assets are
 read from disk per request and need no restart, only a browser refresh.
+
+## Known gaps
+
+Honest about what has and hasn't been exercised.
+
+- **Imgur pages do not work.** It serves a 5 KB JavaScript shell with no
+  Open Graph tags and no media links, so there is nothing to scrape without
+  their API or a headless browser. Direct `i.imgur.com/*.gif` links are fine,
+  as any direct link is. Reddit needed its own workaround (`old.reddit.com`)
+  for the same reason; Imgur has no equivalent.
+- **Giphy search pages yield only the first handful.** They lazy-load, so a
+  scrape sees roughly six. Individual GIF pages and direct media links are
+  unaffected.
+- **Only tested on macOS**, in Chrome. Linux and Windows should work apart from
+  the two macOS-only features (Vision OCR, and the file clipboard that keeps a
+  paste animated), both of which degrade cleanly. Neither has been run.
+- **Firefox has had one path verified** (dragging a GIF off a page, using its
+  `text/x-moz-url`). Safari is untested; it supplies no title with a drag, so
+  imports there will be named `download.gif`.
+- **URL imports skip the duplicate check.** Dropping the same Giphy GIF twice
+  adds it twice; only file adds are deduped.
+- **A running server does not notice a library move.** Stop it first.
 
 ## License
 

@@ -221,3 +221,87 @@ def _staged(data: bytes):
     path = Path(tempfile.mkdtemp()) / "probe.gif"
     path.write_bytes(data)
     return data, path
+
+
+# -- moving the library ------------------------------------------------------
+
+
+def test_move_relocates_everything_and_keeps_annotations(tmp_path):
+    """A move is files only: nothing in the database is a path, so nothing in
+    it needs rewriting. This is what keeps relocating cheap."""
+    from gifhole.store import Store, move_library
+
+    source = Store(tmp_path / "before")
+    gif = source.add_bytes("keeper.gif", make_textured_gif(50), tags="cat reaction")
+    source.update(gif.id, title="Keeper", description="the good one")
+    source.remove(source.add_bytes("binned.gif", make_textured_gif(51)).id)
+    source.db.close()
+
+    destination = tmp_path / "moved" / "library"
+    assert move_library(source.root, destination) == destination.resolve()
+    assert not source.root.exists()
+
+    reopened = Store(destination)
+    (kept,) = reopened.list_gifs()
+    assert kept.filename == "keeper.gif"
+    assert kept.title == "Keeper"
+    assert kept.tags == ["cat", "reaction"]
+    assert kept.description == "the good one"
+    # The trash comes along too, or "recoverable" would stop being true.
+    assert len(reopened.trash_entries()) == 1
+
+
+def test_move_into_an_empty_directory_does_not_nest(tmp_path):
+    from gifhole.store import Store, move_library
+
+    source = Store(tmp_path / "before")
+    source.add_bytes("a.gif", make_textured_gif(52))
+    source.db.close()
+    destination = tmp_path / "empty"
+    destination.mkdir()
+    move_library(source.root, destination)
+    assert (destination / "gifs" / "a.gif").is_file()
+    assert not (destination / source.root.name).exists()
+
+
+def test_move_refuses_a_non_empty_destination(tmp_path):
+    """Merging into someone else's folder could silently mix two libraries."""
+    from gifhole.store import Store, move_library
+
+    source = Store(tmp_path / "before")
+    source.add_bytes("a.gif", make_textured_gif(53))
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    (occupied / "something.txt").write_text("mine")
+    with pytest.raises(ValueError, match="not empty"):
+        move_library(source.root, occupied)
+    assert source.root.exists()
+
+
+def test_move_refuses_a_destination_inside_itself(store, tmp_path):
+    from gifhole.store import move_library
+
+    store.add_bytes("a.gif", make_textured_gif(54))
+    with pytest.raises(ValueError, match="inside the library"):
+        move_library(store.root, store.root / "nested")
+    assert store.root.exists()
+
+
+def test_move_refuses_a_directory_that_is_not_a_library(tmp_path):
+    """Guards against a typo'd --root turning into a move of the wrong folder."""
+    from gifhole.store import move_library
+
+    stranger = tmp_path / "documents"
+    (stranger / "sub").mkdir(parents=True)
+    with pytest.raises(ValueError, match="does not look like"):
+        move_library(stranger, tmp_path / "elsewhere")
+    assert stranger.exists()
+
+
+def test_move_refuses_to_move_onto_itself(store):
+    from gifhole.store import move_library
+
+    store.add_bytes("a.gif", make_textured_gif(55))
+    with pytest.raises(ValueError, match="already is"):
+        move_library(store.root, store.root)
+    assert store.root.exists()

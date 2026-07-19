@@ -8,6 +8,7 @@ database loses annotations but never GIFs.
 from __future__ import annotations
 
 import re
+import shutil
 import sqlite3
 import time
 import unicodedata
@@ -93,6 +94,48 @@ def safe_filename(name: str) -> str:
 
 def split_tags(raw: str) -> list[str]:
     return [t for t in (part.strip().lower() for part in raw.replace(",", " ").split()) if t]
+
+
+def looks_like_library(path: Path) -> bool:
+    """A directory gifhole has used before, as opposed to any old folder."""
+    return (path / "gifhole.db").is_file() or (path / "gifs").is_dir()
+
+
+def move_library(source: Path, destination: Path) -> Path:
+    """Move a whole library to a new location.
+
+    Only the files move. Nothing in the database is rewritten because nothing
+    in it is a path: rows store a bare filename and the root is supplied at
+    runtime. That is a property worth keeping, since it makes relocating the
+    library a plain directory move rather than a migration.
+    """
+    source = Path(source).expanduser().resolve()
+    destination = Path(destination).expanduser().resolve()
+
+    if not source.is_dir():
+        raise ValueError(f"no library at {source}")
+    if not looks_like_library(source):
+        raise ValueError(f"{source} does not look like a gifhole library")
+    if destination == source:
+        raise ValueError("the destination is where the library already is")
+    # Moving a directory into its own subtree would recurse into the thing
+    # being moved; shutil raises for this but late and less clearly.
+    if source in destination.parents:
+        raise ValueError("the destination is inside the library being moved")
+    if destination.exists():
+        if not destination.is_dir():
+            raise ValueError(f"{destination} is a file")
+        if any(destination.iterdir()):
+            raise ValueError(f"{destination} already exists and is not empty")
+        # An empty directory is fine, but shutil.move would nest inside it, so
+        # it goes and gets recreated by the move itself.
+        destination.rmdir()
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    # shutil.move, not rename: a library is very often being moved onto another
+    # disk, and rename cannot cross filesystems.
+    shutil.move(str(source), str(destination))
+    return destination
 
 
 class Store:

@@ -102,13 +102,24 @@ stray request cannot empty it.
 - The server fetches arbitrary URLs, so `fetch.ensure_public_http_url()` gates
   every download against `file://`, non-http schemes, and private/loopback IPs.
   Call it before any new fetch path, not just at the entry point.
+- **Moving a library is a directory move, and must stay that way.** Nothing in
+  the database is a path: rows hold a bare filename and the root arrives at
+  runtime. Don't start storing absolute paths, or `store.move_library()` stops
+  being a `shutil.move` and becomes a migration. It uses `shutil.move` rather
+  than `rename` because libraries get moved onto other disks.
 - **Reddit needs its own path, and so may other platforms.** `www.reddit.com`
   serves a JS-only shell (no media in the HTML) and the `.json` API 403s
   non-browser clients, so the generic scraper finds nothing. `fetch.py` rewrites
   Reddit URLs to `old.reddit.com`; the scrape itself stays generic, so a page URL
   yields every GIF on the page, comments included. `USER_AGENT` is browser-like
   for the same reason. Before claiming a platform is supported, fetch a real URL
-  from it; a generic scraper working elsewhere proves nothing.
+  from it; a generic scraper working elsewhere proves nothing. Measured, not
+  assumed: Tenor yields ~36 candidates from a search page and Reddit works via
+  `old.reddit.com`, but **Imgur returns a 5 KB JS shell with no Open Graph tags
+  and no media links at all**, so it cannot be scraped without their API, and
+  Giphy search pages lazy-load so a scrape sees only the first handful. The
+  README's "known gaps" section lists these; keep it truthful rather than
+  aspirational.
 
 ## Gotchas
 
