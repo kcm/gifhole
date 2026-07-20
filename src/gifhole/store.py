@@ -39,7 +39,8 @@ MIGRATIONS = {
     "source_url": "TEXT NOT NULL DEFAULT ''",
     "ocr_at": "REAL NOT NULL DEFAULT 0",
     "enriched_at": "REAL NOT NULL DEFAULT 0",
-    # Duplicate detection: exact bytes, and one perceptual hash of a frame.
+    # Duplicate detection: exact bytes (sha256), and space-joined perceptual
+    # hashes of several frames (phash) so re-encodes at different lengths match.
     "sha256": "TEXT NOT NULL DEFAULT ''",
     "phash": "TEXT NOT NULL DEFAULT ''",
 }
@@ -160,6 +161,14 @@ class Store:
         self.db.executescript(SCHEMA)
         self._migrate()
         self.db.commit()
+        # Cache for the ambient "possible dupes" count. The scan is O(n^2) and
+        # too slow for the request thread, so it runs in a background job and
+        # the result is cached. Invalidation is keyed on `library_signature()`,
+        # a cheap fingerprint of the data, NOT on remembering to flag every
+        # mutation: the classic way to get cache bugs is scattered manual
+        # invalidation, so the cache is stale exactly when the data changed.
+        self._dup_count: int | None = None
+        self._dup_signature: tuple | None = None
 
     def _migrate(self) -> None:
         existing = {row["name"] for row in self.db.execute("PRAGMA table_info(gifs)")}
@@ -303,7 +312,13 @@ class Store:
         self.db.commit()
 
     def set_enrichment(self, gif_id: int, description: str, tags: str = "") -> None:
-        """Store a Claude-generated description, merging any suggested tags."""
+        """Store a Claude description and tags: the description replaces what
+        was there, the tags merge into it. The two are treated differently on
+        purpose. A GIF has one description, so a re-describe should overwrite a
+        bad earlier one rather than leave it. Tags are a set you also curate by
+        hand, so describe adds to them and never removes, matching the
+        bulk-tag rule. The UI still snapshots both first and offers a one-step
+        undo, so a describe you did not want can be taken back whole."""
         gif = self.get(gif_id)
         if gif is None:
             return
@@ -337,8 +352,13 @@ class Store:
         Without this a library built up over months would only ever detect
         duplicates of things added after the upgrade.
         """
+        # Also re-hash old single-frame phashes (one value, no space): the hash
+        # became multi-frame, and a library built under the old scheme would
+        # otherwise keep missing re-encodes the new one catches. instr(...)=0
+        # matches both empty and single-hash; a legit one-frame GIF gets
+        # re-hashed on each run, which is cheap and rare.
         rows = self.db.execute(
-            "SELECT id, filename FROM gifs WHERE sha256 = '' OR phash = ''"
+            "SELECT id, filename FROM gifs WHERE sha256 = '' OR phash = '' OR instr(phash, ' ') = 0"
         ).fetchall()
         done = 0
         for row in rows[:limit] if limit else rows:
@@ -360,6 +380,10 @@ class Store:
     def duplicate_groups(self) -> list[list[Gif]]:
         """Duplicates already sitting in the library, grouped."""
         gifs = [g for g in self.list_gifs() if g.sha256 or g.phash]
+        # Parse each phash into int frame hashes once, up front, rather than
+        # re-parsing hex inside the O(n^2) comparison. This is the difference
+        # between a scan that is slow and one that is not.
+        frames = {g.id: dedupe.frame_ints(g.phash) for g in gifs}
         seen: set[int] = set()
         groups = []
         for i, gif in enumerate(gifs):
@@ -369,8 +393,8 @@ class Store:
             for other in gifs[i + 1 :]:
                 if other.id in seen:
                     continue
-                same = (gif.sha256 and gif.sha256 == other.sha256) or dedupe.is_near(
-                    gif.phash, other.phash
+                same = (gif.sha256 and gif.sha256 == other.sha256) or dedupe.frames_near(
+                    frames[gif.id], frames[other.id]
                 )
                 if same:
                     group.append(other)
@@ -379,6 +403,16 @@ class Store:
                 seen.add(gif.id)
                 groups.append(group)
         return groups
+
+    def library_signature(self) -> tuple:
+        """A cheap fingerprint of the library, over one indexed aggregate, that
+        changes on any add, remove, or re-hash. The duplicate-count cache is
+        keyed on this, so it is stale exactly when the data it summarises is,
+        with no per-mutation bookkeeping to forget."""
+        row = self.db.execute(
+            "SELECT COUNT(*), COALESCE(SUM(id), 0), COALESCE(SUM(LENGTH(phash)), 0) FROM gifs"
+        ).fetchone()
+        return tuple(row)
 
     # What a library-wide job should touch. Named rather than boolean flags so
     # the UI can show a count for exactly what it is about to spend money on.
@@ -549,6 +583,16 @@ class Store:
             self.db.execute("DELETE FROM gifs WHERE filename = ?", (name,))
         self.db.commit()
         return {"added": len(on_disk - known), "removed": len(known - on_disk)}
+
+    def recompute_duplicate_count(self) -> int:
+        """Refresh the cached possible-duplicates count and stamp the signature
+        it was computed at. Runs in a background job (the scan is O(n^2)).
+        Signature captured before the scan, so a change during it just triggers
+        one more recompute rather than marking a stale count fresh."""
+        sig = self.library_signature()
+        self._dup_count = len(self.duplicate_groups())
+        self._dup_signature = sig
+        return self._dup_count
 
 
 def _matches(gif: Gif, terms: list[str]) -> bool:

@@ -20,10 +20,111 @@ losing anything. Anything that would break that is a major change.
 
 ## [Unreleased]
 
+### Changed
+
+- The Python floor is 3.11, down from 3.13. Nothing in gifhole needed 3.13,
+  and requiring it meant that Debian 12 and Ubuntu 22.04 users had to install
+  a second Python before they could install gifhole at all. Resolved
+  dependency versions are unchanged. CI now runs the floor rather than the
+  newest release, since development already exercises the newest every day.
+
 ### Added
+
+- A process console, toggled with ` or ~ like a GUI editor's terminal. Hidden
+  by default and remembered per browser, it is the detailed view the ambient
+  rail is not: timestamped sub-steps as they happen ("reading text: cat.gif",
+  "cat.gif: asking claude-opus-4-8", "cat.gif: tagged funny, dog"). Backed by
+  an in-memory log any server path can emit into, read over HTTP by a cursor,
+  so it tails live without replaying and reusable for future long operations.
+  A costly describe-all is stopped from here too. It replaces the old job
+  strip rather than sitting alongside it. Every way a GIF enters the library
+  logs a line, including a dropped file and a rejected duplicate, which used
+  to happen silently.
+- Cross-engine browser tests (`browser/run`): the UI is exercised in chromium,
+  firefox and webkit against the real Linux container, not just in the
+  author's Mac browser. They assert that the console stays silent, because
+  every UI bug this project has shipped surfaced first as an uncaught
+  exception and a control that quietly did nothing.
+
+### Added
+
+- Startup prints the optional capabilities (`reading:` for OCR, `enrich:` for
+  Claude describe), so a launch says `enrich: ready` or `enrich: off (no API
+  key...)` up front. Both were previously invisible when missing: a disabled
+  button, an OCR that silently did not run.
+- Describe replaces the description and merges tags: a GIF has one description,
+  so a re-describe overwrites a bad earlier one, while tags are added to and
+  never removed, matching how bulk tagging works. A per-card undo (a small ↶
+  shown only when the describe changed something) restores the previous
+  description and tags together, so an unwanted describe can be taken back
+  whole.
+- Per-entry OCR control: clicking a GIF's burned-in text opens a small re-run /
+  delete menu. Re-run re-reads just that GIF (picking up the OCR filter), delete
+  clears its text and marks it read so a Rescan will not bring the noise back. A
+  GIF with no text yet shows a faint "read text" affordance that offers re-run.
+- A "Re-read text" maintenance action in the library panel. Rescan only reads
+  GIFs never read before, so after the OCR itself improves there was no way to
+  re-apply it to what was already in the library. This re-reads every GIF's
+  burned-in text, replacing what is stored. Free and local, so it is grouped
+  with the other no-cost maintenance actions, not with the paid describe.
+
+### Changed
+
+- The import picker pre-selects only the main GIF when it came from the
+  bookmarklet. A single GIF's page hands over the hero plus its size variants;
+  they are all imported but only the hero is ticked, so you are not filing five
+  copies by reflex. Grab URL still ticks the whole page. Import and the select
+  buttons disarm when they would do nothing.
+- The skin picker moved from the footer into the Library panel (a new
+  "Appearance" section), and the panel is tidied now that it holds more.
+- Removed the tag cloud above the wall. Tag filtering still works (click a tag
+  chip on any card, or type the tag in search); the cloud was prime real estate
+  for a secondary navigation mode.
 
 ### Fixed
 
+- A "possible dupes: N" prompt next to the Library button, so duplicates
+  surface on their own instead of only when you go looking. A background scan
+  refreshes the count at startup and after the library changes; clicking it
+  opens the duplicates review.
+- Duplicate detection now compares several frames per GIF instead of one, so two
+  encodes of the same GIF at different lengths (e.g. 54 frames vs 29) are caught.
+  The single-frame hash sampled "a third of the way in", which landed on
+  different moments when the lengths differed and missed real duplicates. Run
+  "Find duplicates" once after upgrading; it re-hashes the library as it scans.
+- Card polish (a design-review pass): the per-card delete "x" is muted instead
+  of bold blue so a wall of them stops competing with the GIFs, the description
+  is roman while the OCR quote stays italic so the two stop reading as one grey
+  block, and the meta-row checkbox sits on the text midline.
+- The card's lower half no longer collapses into a mess when tags, OCR text and
+  a description are all present. The burned-in text, the description and the
+  describe/undo actions each get their own line now, so a description wraps
+  full-width instead of into a tall narrow ribbon beside "read text".
+- The console logs the OCR text itself, and the raw read when the scoreboard
+  filter changed it, instead of a meaningless "1 line" (the text is one joined
+  line, so the count was always 1). You can now see exactly what was read and
+  what the cleanup dropped.
+- Deleting a GIF's OCR text updates the card immediately, in place, instead of
+  relying on a grid reload that could lag or, if the current search matched the
+  text just removed, drop the card.
+- OCR no longer stores scoreboard and timer noise as searchable text. Vision
+  reads a burned-in match clock or a channel bug with high confidence, so the
+  confidence threshold never caught them; a lexical filter now drops lines that
+  read as a HUD (bare numbers, clocks, single-letter fragments) while keeping
+  real captions, even mangled ones. A football clip that stored
+  "89 73:29 DOR 0 L RMA ES ... VAMOS" now stores just the caption.
+- The library panel opens. `body` was scoped to the `try` and read outside it,
+  so the panel threw and stayed hidden, taking bulk describe, find duplicates,
+  trash, clear-the-library and the bookmarklet with it.
+- Setting a token via `docker compose` works. `GIFHOLE_TOKEN` was commented out
+  in `compose.yaml`, so the README's own instructions for exposing gifhole
+  produced a server with no authentication at all.
+- An explicit `?token=` now outranks a cookie already held for that host.
+  Cookies ignore the port, so an owner's writer cookie answered for every
+  gifhole on the machine and their own guest link could not be checked.
+- A malformed `#add=` fragment is cleared from the address bar and a `null`
+  payload no longer throws. It used to re-fire the same complaint on every
+  reload, and a repeat press of the bookmarklet fired no `hashchange` at all.
 - Half-configured access control refuses to start. A read token or public
   reads without a write token used to warn and serve everything, which looks
   like access control and is not.

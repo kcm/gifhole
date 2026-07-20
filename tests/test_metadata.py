@@ -59,10 +59,16 @@ def test_description_is_searchable(store):
     assert [g.filename for g in store.list_gifs("clumsy")] == ["x.gif"]
 
 
-def test_enrichment_merges_tags_without_duplicating(store):
+def test_enrichment_merges_tags_but_replaces_the_description(store):
+    """Tags merge (describe adds, never removes, matching the bulk-tag rule);
+    the description replaces, since a GIF has only one and a re-describe should
+    overwrite a bad earlier pass. The UI's undo covers both."""
     gif = store.add_bytes("y.gif", make_gif(), tags="cat reaction")
-    store.set_enrichment(gif.id, "desc", "cat funny")
-    assert store.get(gif.id).tags == ["cat", "reaction", "funny"]
+    gif = store.set_enrichment(gif.id, "an old note", "handmade") or store.get(gif.id)
+    store.set_enrichment(gif.id, "a fresh description", "cat funny")
+    after = store.get(gif.id)
+    assert after.tags == ["cat", "reaction", "handmade", "funny"]
+    assert after.description == "a fresh description"
 
 
 def test_source_url_is_recorded(store):
@@ -329,12 +335,30 @@ def test_a_gif_that_is_flat_throughout_gets_no_hash(tmp_path):
     assert dedupe.perceptual_hash(path) == ""
 
 
-def test_frame_order_stays_in_range_and_is_deduped():
-    from gifhole.dedupe import _frame_order
+def test_sample_positions_span_the_animation_deduped_and_in_range():
+    from gifhole.dedupe import _sample_positions
 
-    assert _frame_order(1) == [0]
-    assert all(0 <= i < 12 for i in _frame_order(12))
-    assert len(set(_frame_order(12))) == len(_frame_order(12))
+    assert _sample_positions(1, 10) == [0]
+    pos = _sample_positions(54, 10)
+    assert pos[0] == 0 and pos[-1] == 53  # first and last frame are sampled
+    assert all(0 <= i < 54 for i in pos)
+    assert pos == sorted(set(pos))  # ordered and deduped
+    # A short animation samples every frame rather than repeating.
+    assert _sample_positions(4, 10) == [0, 1, 2, 3]
+
+
+def test_perceptual_hash_is_multi_frame(tmp_path):
+    """Several frame hashes now, not one, so two encodes of the same GIF that
+    line up only at some moments can still match (distance takes the closest
+    pair). A real pair that a single-frame hash missed is what prompted this."""
+    from gifhole import dedupe
+
+    p = tmp_path / "many.gif"
+    p.write_bytes(make_animated_gif(frames=10))
+    h = dedupe.perceptual_hash(p)
+    assert len(h.split()) > 1, "phash should hold several frame hashes"
+    # An old single-frame hash still compares, using its one frame.
+    assert dedupe.distance(h.split()[0], h) == 0
 
 
 # -- cancelling a run --------------------------------------------------------
@@ -488,6 +512,25 @@ def test_clipboard_says_what_is_needed_when_there_is_nothing(monkeypatch, tmp_pa
         clipboard.copy_file(gif)
 
 
+def sampled_indices(frames, total, width=32):
+    """Which frame of a make_animated_gif() each sampled image actually is.
+
+    The fixture paints frame `i` with an orange bar starting at `i * width /
+    total`, so the bar's position identifies the frame. Reading it back is the
+    point: this test used to recompute the sampling formula and assert on its
+    own copy of it, which passes no matter what sample_frames() returns. It
+    survived reintroducing the exact bug the docstring describes.
+    """
+    box = width / total
+    found = []
+    for frame in frames:
+        pixels = frame.load()
+        columns = [x for x in range(width) if pixels[x, 0][0] > 120]
+        assert columns, "fixture frame has no bar to locate"
+        found.append(round(min(columns) / box))
+    return sorted(found)
+
+
 def test_frame_sampling_reaches_the_end_of_the_animation():
     """A caption that only appears at the end used to be invisible: the old
     spacing put the last sample at count/(count+1) of the way through, so with
@@ -495,21 +538,15 @@ def test_frame_sampling_reaches_the_end_of_the_animation():
     land at the end."""
     from gifhole.frames import sample_frames
 
-    data = make_animated_gif(frames=40)
+    total = 40
     path = pathlib.Path(tempfile.mkdtemp()) / "long.gif"
-    path.write_bytes(data)
+    path.write_bytes(make_animated_gif(frames=total))
     frames = sample_frames(path, 3)
     assert len(frames) == 3
 
-    # Assert on the indices, which is the property that broke, not on pixels.
-    import PIL.Image
-
-    with PIL.Image.open(path) as img:
-        total = img.n_frames
-    first, last = 1, total - 1
-    expected = sorted({first + round(i * (last - first) / 2) for i in range(3)})
-    assert expected[-1] == total - 1, "the final frame must be sampled"
-    assert expected[0] <= 1, "and the start, just past any title card"
+    got = sampled_indices(frames, total)
+    assert got[-1] == total - 1, f"the final frame must be sampled, got {got}"
+    assert got[0] <= 1, f"and the start, just past any title card, got {got}"
 
 
 def test_frame_sampling_still_skips_the_title_card():
@@ -517,9 +554,14 @@ def test_frame_sampling_still_skips_the_title_card():
     of very few looks."""
     from gifhole.frames import sample_frames
 
+    total = 6
     path = pathlib.Path(tempfile.mkdtemp()) / "short.gif"
-    path.write_bytes(make_animated_gif(frames=6))
-    assert len(sample_frames(path, 3)) == 3
+    path.write_bytes(make_animated_gif(frames=total))
+    frames = sample_frames(path, 3)
+    assert len(frames) == 3
+    # Asserting on the count alone let frame 0 be sampled, which is the one
+    # thing this test exists to forbid.
+    assert 0 not in sampled_indices(frames, total)
 
 
 # -- port handling -----------------------------------------------------------
@@ -595,3 +637,107 @@ def test_a_free_port_reads_as_free():
         probe.bind(("127.0.0.1", 0))
         free = probe.getsockname()[1]
     assert port_in_use("127.0.0.1", free) is False
+
+
+def test_a_tesseract_failure_is_a_failed_job_not_an_empty_read():
+    """The bug the Vision path was fixed for, reintroduced in the Tesseract
+    path: a failure returned no lines, which read as "no text found", stamped
+    ocr_at, and excluded the GIF from retry forever."""
+    from unittest.mock import patch
+
+    from gifhole import ocr
+
+    path = pathlib.Path(tempfile.mkdtemp()) / "x.gif"
+    path.write_bytes(make_animated_gif())
+
+    class Failed:
+        returncode = 1
+        stdout = b""
+        stderr = b"Error opening data file tessdata/eng.traineddata"
+
+    with (
+        patch.object(ocr, "_load_vision", lambda: None),
+        patch.object(ocr, "_tesseract", lambda: "/usr/bin/tesseract"),
+        patch.object(ocr.subprocess, "run", lambda *a, **k: Failed()),
+    ):
+        result = ocr.read_gif_text(path)
+
+    assert result.available is False, "a broken engine must not report a clean read"
+    assert "tessdata" in result.reason or "exited" in result.reason
+
+
+def test_tesseract_finding_nothing_is_still_a_success():
+    """The other half: an empty page is a real answer and must not be an error,
+    or every wordless GIF would retry forever."""
+    from unittest.mock import patch
+
+    from gifhole import ocr
+
+    path = pathlib.Path(tempfile.mkdtemp()) / "x.gif"
+    path.write_bytes(make_animated_gif())
+
+    class Empty:
+        returncode = 0
+        stdout = b"level\tblock_num\tpar_num\tline_num\tconf\ttext\n"
+        stderr = b""
+
+    with (
+        patch.object(ocr, "_load_vision", lambda: None),
+        patch.object(ocr, "_tesseract", lambda: "/usr/bin/tesseract"),
+        patch.object(ocr.subprocess, "run", lambda *a, **k: Empty()),
+    ):
+        result = ocr.read_gif_text(path)
+
+    assert result.available is True
+    assert result.text == ""
+
+
+# -- OCR quality: don't store scoreboard/HUD noise ---------------------------
+
+
+def test_tidy_drops_scoreboard_noise_but_keeps_the_caption():
+    """The real failure that prompted this: a football clip whose burned-in
+    scoreboard and match clock were read with high confidence and stored as
+    searchable "text", drowning the one real caption.
+
+    These are the exact lines macOS Vision returned for that GIF."""
+    from gifhole.ocr import _tidy
+
+    lines = [
+        "89 73:29",
+        "DOR 0 L RMA",
+        "ES 73:30",
+        "DOR 0 1RMA",
+        "IS 73:31",
+        "DOR 0 1 RMA",
+        "VAMOSINO!",
+        "JO!!!",
+    ]
+    text = _tidy(lines)
+    # Every scoreboard fragment is gone.
+    for junk in ("73:29", "73:30", "73:31", "DOR", "RMA", "89"):
+        assert junk not in text, f"scoreboard noise survived: {junk!r} in {text!r}"
+    # The caption region, mangled by Vision but real, is kept.
+    assert "VAMOSINO" in text
+
+
+def test_looks_like_caption_keeps_real_text():
+    from gifhole.ocr import _looks_like_caption
+
+    for good in ("VAMOS", "this is fine", "when you realize", "OVER 9000", "LEVEL 99", "NO", "WHY"):
+        assert _looks_like_caption(good), f"dropped a real caption: {good!r}"
+
+
+def test_looks_like_caption_drops_hud_noise():
+    from gifhole.ocr import _looks_like_caption
+
+    for junk in ("89", "73:31", "DOR 0 L RMA ES", "0 - 1", "DOR 0", "12:34 5", ":"):
+        assert not _looks_like_caption(junk), f"kept HUD noise: {junk!r}"
+
+
+def test_a_long_word_anchors_a_line_that_also_has_numbers():
+    """A meaningful number must not sink a caption that clearly is one."""
+    from gifhole.ocr import _looks_like_caption
+
+    assert _looks_like_caption("OVER 9000")
+    assert _looks_like_caption("you had ONE job")

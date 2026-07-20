@@ -49,7 +49,7 @@ def test_the_html_defines_no_ids_nothing_uses():
     """Not fatal, but a leftover id is usually the remains of a removed feature."""
     unused = sorted(DEFINED_IDS - REFERENCED_IDS)
     # These are addressed by CSS or by the user, not by a $() lookup.
-    expected = {"graburl", "file", "sort", "search", "theme", "jobs", "tags", "grid", "empty"}
+    expected = {"graburl", "file", "sort", "search", "theme", "grid", "empty"}
     assert not (set(unused) - expected), (
         f"unused ids in index.html: {sorted(set(unused) - expected)}"
     )
@@ -111,6 +111,7 @@ PUBLIC_READ_ROUTES = {
     "/gifs/{filename}",
     "/api/gifs",
     "/api/jobs",
+    "/api/log",
     "/api/library",
     "/api/trash",
     "/api/duplicates",
@@ -118,6 +119,8 @@ PUBLIC_READ_ROUTES = {
 WRITER_ONLY_READ_ROUTES = {
     # Fetches a URL the caller chooses: public would mean an open proxy.
     "/api/preview",
+    # Makes an outbound API call to list models; only a writer describes.
+    "/api/models",
 }
 
 
@@ -149,3 +152,55 @@ def test_every_read_route_is_classified():
         assert not needs_a_writer("GET", path), f"{path} is listed as public but is guarded"
     for path in WRITER_ONLY_READ_ROUTES:
         assert needs_a_writer("GET", path), f"{path} is listed as writer-only but is not guarded"
+
+
+def test_ci_tests_the_python_version_the_project_claims_to_support():
+    """CI runs the floor, not the current release, because development already
+    exercises the newest version every day and nothing exercises the oldest.
+    That only works while the pin and the claim agree: raising
+    `requires-python` without moving CI would leave the floor untested, and
+    lowering CI without the claim would test a version we do not support.
+
+    Ruff's `target-version` is in here too, since it decides whether ruff may
+    rewrite code into syntax the floor cannot parse.
+    """
+    import tomllib
+
+    root = Path(__file__).resolve().parent.parent
+    config = tomllib.loads((root / "pyproject.toml").read_text())
+
+    claim = config["project"]["requires-python"]
+    floor = re.fullmatch(r">=\s*(\d+)\.(\d+)", claim)
+    assert floor, f"requires-python {claim!r} is not a simple floor; update this test"
+    major, minor = floor.group(1), floor.group(2)
+
+    workflow = (root / ".github/workflows/check.yml").read_text()
+    assert f"--python {major}.{minor}" in workflow, (
+        f"pyproject supports {major}.{minor} but CI does not run it. "
+        f"Set `uv sync --python {major}.{minor}` in .github/workflows/check.yml."
+    )
+
+    target = config["tool"]["ruff"]["target-version"]
+    assert target == f"py{major}{minor}", (
+        f"ruff targets {target} but the project supports {major}.{minor}: "
+        f'set target-version = "py{major}{minor}" or ruff may emit syntax the floor '
+        "cannot parse."
+    )
+
+
+def test_the_console_reads_log_fields_the_server_sends():
+    """The console renders /api/log events field by field; a renamed field is
+    `undefined`, which shows as a blank column, not an error. Pin the shape.
+    """
+    import dataclasses
+
+    from gifhole.logbus import Event
+
+    fields = {f.name for f in dataclasses.fields(Event)}
+    read = {"t", "source", "message", "level"}
+    missing = sorted(read - fields)
+    assert not missing, f"app.js reads log fields Event does not have: {missing}"
+
+    # The client tracks the cursor the endpoint returns; both names must agree.
+    assert '"cursor"' in JS or "body.cursor" in JS, "console must read the cursor field"
+    assert "/api/log?since=" in JS, "console must poll with a since cursor"

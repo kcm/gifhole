@@ -20,7 +20,13 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - run: uv sync
+      # The oldest Python the project claims to support, not the newest. A
+      # matrix would spend most of its time re-testing versions that already
+      # get exercised: development happens on the current release, so the
+      # ceiling is covered every day and the floor is covered by nobody.
+      # Testing the floor here costs no extra job and checks the direction
+      # that is actually unobserved. Keep this equal to `requires-python`.
+      - run: uv sync --python 3.11
 
       - name: Lint
         run: uv run ruff check .

@@ -666,3 +666,264 @@ def test_access_matrix(tmp_path, label, config, expected):
         write = client.post("/api/rescan", headers=headers).status_code
         assert (read < 300) is may_read, f"{label}: {caller or 'nobody'} read got {read}"
         assert (write < 300) is may_write, f"{label}: {caller or 'nobody'} write got {write}"
+
+
+# -- the cookie must never leak the secret -----------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "config"),
+    [
+        ("public reads", {"token": "WRITE", "public_reads": True}),
+        ("read token", {"token": "WRITE", "read_token": "READ"}),
+        ("write token only", {"token": "WRITE"}),
+    ],
+)
+def test_a_wrong_token_is_never_handed_the_real_one(tmp_path, label, config):
+    """The worst bug of the session: the cookie was set whenever `?token=` was
+    present, to the *write* token, without checking the value. Under public
+    reads one anonymous request with any garbage collected full write access
+    out of the Set-Cookie header."""
+    from gifhole.app import create_app
+
+    client = TestClient(create_app(tmp_path, auto_ocr=False, **config))
+    res = client.get("/", params={"token": "GARBAGE"}, follow_redirects=False)
+    assert "WRITE" not in res.headers.get("set-cookie", ""), label
+    assert not res.cookies.get("gifhole_token"), label
+
+
+def test_a_read_token_holder_is_not_handed_the_write_token(tmp_path):
+    """The documented onboarding link was the exploit: a guest following
+    ?token=<read token> got the writer's secret back in a cookie."""
+    from gifhole.app import create_app
+
+    client = TestClient(create_app(tmp_path, auto_ocr=False, token="WRITE", read_token="READ"))
+    res = client.get("/", params={"token": "READ"}, follow_redirects=False)
+    assert "WRITE" not in res.headers.get("set-cookie", "")
+    # The reader still gets a cookie, since <img> cannot carry a header.
+    assert res.cookies.get("gifhole_token") == "READ"
+
+
+def test_the_right_token_still_gets_its_cookie(tmp_path):
+    from gifhole.app import create_app
+
+    client = TestClient(create_app(tmp_path, auto_ocr=False, token="WRITE", public_reads=True))
+    res = client.get("/", params={"token": "WRITE"}, follow_redirects=False)
+    assert res.cookies.get("gifhole_token") == "WRITE"
+
+
+def test_an_explicit_token_outranks_a_cookie_already_held(tmp_path):
+    """Cookies ignore the port, so an owner's writer cookie for 127.0.0.1
+    answered for every gifhole on that host: opening their own guest link came
+    back with the writer's UI, so a share link could not be checked before it
+    was sent. An explicit ?token= wins and replaces the cookie."""
+    from gifhole.app import create_app
+
+    client = TestClient(create_app(tmp_path, auto_ocr=False, token="WRITE", read_token="READ"))
+    client.cookies.set("gifhole_token", "WRITE")
+
+    res = client.get("/api/jobs", params={"token": "READ"})
+    assert res.status_code == 200
+    assert res.json()["capabilities"]["read_only"] is True, "the link, not the cookie, decides"
+    # And the downgrade sticks, rather than the old cookie winning again.
+    assert res.cookies.get("gifhole_token") == "READ"
+
+
+@pytest.mark.parametrize("value", ["é", "café", "\U0001f600"])
+def test_a_non_ascii_token_does_not_crash_the_server(tmp_path, value):
+    """compare_digest raises TypeError on non-ASCII str, and this runs before
+    authentication on every request, so it was a 500 anyone could trigger."""
+    from gifhole.app import create_app
+
+    client = TestClient(create_app(tmp_path, auto_ocr=False, token="WRITE"))
+    assert client.get("/api/gifs", params={"token": value}).status_code == 401
+
+
+def test_uploading_a_gif_narrates_to_the_console_log(client):
+    """A dropped or pasted GIF used to log nothing until OCR ran, and a
+    duplicate drop logged nothing at all, which read as the import silently
+    failing. Every entry path emits an import line now."""
+    data = make_textured_gif(70)
+
+    res = client.post("/api/gifs", files={"file": ("dropped.gif", data, "image/gif")})
+    assert res.status_code == 201
+    messages = [e["message"] for e in client.get("/api/log").json()["events"]]
+    assert any("added dropped.gif" in m for m in messages), messages
+
+    # The same bytes again: a duplicate, which must say so rather than vanish.
+    dup = client.post("/api/gifs", files={"file": ("dropped2.gif", data, "image/gif")})
+    assert dup.status_code == 200 and dup.json().get("duplicate")
+    messages = [e["message"] for e in client.get("/api/log").json()["events"]]
+    assert any("duplicate" in m and "dropped2.gif" in m for m in messages), messages
+
+
+def test_reocr_re_reads_and_overwrites_already_read_text(tmp_path, monkeypatch):
+    """Rescan only reads GIFs never read; this is the tool for after the OCR
+    logic improves. A GIF read under the old rules must pick up the new."""
+    from fastapi.testclient import TestClient
+
+    from gifhole import ocr
+    from gifhole.app import create_app
+
+    app = create_app(tmp_path, auto_ocr=False)
+    client = TestClient(app)
+    gid = client.post(
+        "/api/gifs", files={"file": ("s.gif", make_textured_gif(80), "image/gif")}
+    ).json()["id"]
+
+    # Stored under the "old" logic: scoreboard noise the new filter drops.
+    app.state.store.set_ocr(gid, "89 73:29 DOR 0 L RMA ES VAMOS")
+
+    # A real engine now, exercising the actual _tidy filter on raw lines.
+    monkeypatch.setattr(ocr, "available", lambda: True)
+    monkeypatch.setattr(
+        ocr,
+        "read_gif_text",
+        lambda *a, **k: ocr.OcrResult(
+            ocr._tidy(["89 73:29", "DOR 0 L RMA", "VAMOS", "NO!"]), available=True
+        ),
+    )
+
+    res = client.post("/api/gifs/reocr")
+    assert res.json() == {"ok": True, "queued": 1}
+    assert app.state.jobs.wait_idle()
+    assert app.state.store.get(gid).ocr_text == "VAMOS NO!"
+
+
+def test_reocr_without_an_engine_is_a_clear_503(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from gifhole import ocr
+    from gifhole.app import create_app
+
+    monkeypatch.setattr(ocr, "available", lambda: False)
+    client = TestClient(create_app(tmp_path, auto_ocr=False))
+    assert client.post("/api/gifs/reocr").status_code == 503
+
+
+def test_per_entry_ocr_rerun_and_delete(tmp_path, monkeypatch):
+    """The card's re-run / delete menu: re-run re-reads one GIF (overwriting),
+    delete clears its text and marks it read so a Rescan will not bring the
+    garbage back."""
+    from fastapi.testclient import TestClient
+
+    from gifhole import ocr
+    from gifhole.app import create_app
+
+    app = create_app(tmp_path, auto_ocr=False)
+    client = TestClient(app)
+    gid = client.post(
+        "/api/gifs", files={"file": ("h.gif", make_textured_gif(90), "image/gif")}
+    ).json()["id"]
+    app.state.store.set_ocr(gid, "89 73:29 DOR 0 VAMOS")
+
+    # delete clears the text but marks it read (ocr_at set), so needing_ocr
+    # excludes it and a plain Rescan will not re-populate.
+    assert client.delete(f"/api/gifs/{gid}/ocr").json()["ok"] is True
+    g = app.state.store.get(gid)
+    assert g.ocr_text == "" and g.ocr_at > 0
+    assert gid not in [x.id for x in app.state.store.needing_ocr()]
+
+    # re-run reads it again with the current filter and overwrites.
+    monkeypatch.setattr(ocr, "available", lambda: True)
+    monkeypatch.setattr(
+        ocr, "read_gif_text", lambda *a, **k: ocr.OcrResult(ocr._tidy(["89 73:29", "VAMOS"]), True)
+    )
+    assert client.post(f"/api/gifs/{gid}/ocr").json()["ok"] is True
+    assert app.state.jobs.wait_idle()
+    assert app.state.store.get(gid).ocr_text == "VAMOS"
+
+
+def test_clearing_ocr_for_a_missing_gif_is_404(client):
+    assert client.delete("/api/gifs/4242/ocr").status_code == 404
+
+
+def test_models_endpoint_lists_and_defaults(tmp_path, monkeypatch):
+    """The picker's source: available models plus the current default."""
+    from fastapi.testclient import TestClient
+
+    from gifhole import enrich
+    from gifhole.app import create_app
+
+    monkeypatch.setattr(enrich, "available", lambda: (True, ""))
+    monkeypatch.setattr(
+        enrich, "list_models", lambda: [{"id": "claude-sonnet-5", "name": "Claude Sonnet 5"}]
+    )
+    client = TestClient(create_app(tmp_path, auto_ocr=False))
+    body = client.get("/api/models").json()
+    assert body["default"] == enrich.default_model()
+    assert body["models"][0]["id"] == "claude-sonnet-5"
+
+
+def test_describe_passes_the_chosen_model_through(tmp_path, monkeypatch):
+    """The picker's choice must reach the API call, and an unknown model is
+    refused before any image is uploaded."""
+    from fastapi.testclient import TestClient
+
+    from gifhole import enrich
+    from gifhole.app import create_app
+
+    seen = {}
+    monkeypatch.setattr(enrich, "available", lambda: (True, ""))
+    monkeypatch.setattr(
+        enrich,
+        "list_models",
+        lambda: [{"id": "claude-sonnet-5", "name": "S"}, {"id": "claude-haiku-4-5", "name": "H"}],
+    )
+
+    def fake_describe(path, frames=3, vocabulary=None, model=None):
+        seen["model"] = model
+        return {"description": "d", "meme_name": "", "tags": []}
+
+    monkeypatch.setattr(enrich, "describe_gif", fake_describe)
+
+    app = create_app(tmp_path, auto_ocr=False)
+    client = TestClient(app)
+    gid = client.post(
+        "/api/gifs", files={"file": ("m.gif", make_textured_gif(91), "image/gif")}
+    ).json()["id"]
+
+    client.post(f"/api/gifs/{gid}/enrich", json={"model": "claude-haiku-4-5"})
+    assert app.state.jobs.wait_idle()
+    assert seen["model"] == "claude-haiku-4-5"
+
+    assert (
+        client.post(f"/api/gifs/{gid}/enrich", json={"model": "made-up-model"}).status_code == 400
+    )
+
+
+def test_default_model_is_env_overridable(monkeypatch):
+    from gifhole import enrich
+
+    monkeypatch.delenv("GIFHOLE_ENRICH_MODEL", raising=False)
+    assert enrich.default_model() == enrich.DEFAULT_MODEL
+    monkeypatch.setenv("GIFHOLE_ENRICH_MODEL", "claude-opus-4-8")
+    assert enrich.default_model() == "claude-opus-4-8"
+
+
+def test_ocr_log_shows_the_text_and_the_cleanup(tmp_path, monkeypatch):
+    """The console should print what was read, and when the HUD filter changed
+    it, the raw read too, rather than a meaningless line count."""
+    from fastapi.testclient import TestClient
+
+    from gifhole import ocr
+    from gifhole.app import create_app
+
+    monkeypatch.setattr(ocr, "available", lambda: True)
+    monkeypatch.setattr(
+        ocr,
+        "read_gif_text",
+        lambda *a, **k: ocr.OcrResult("VAMOS", available=True, raw="89 73:29 DOR 0 VAMOS"),
+    )
+    app = create_app(tmp_path, auto_ocr=True)
+    client = TestClient(app)
+    client.post("/api/gifs", files={"file": ("s.gif", make_textured_gif(92), "image/gif")})
+    assert app.state.jobs.wait_idle()
+
+    messages = [
+        e["message"] for e in client.get("/api/log").json()["events"] if e["source"] == "ocr"
+    ]
+    assert any("“VAMOS”" in m for m in messages), messages
+    assert any("raw was" in m and "DOR" in m for m in messages), messages
+    # And no meaningless "1 line(s)".
+    assert not any("line(s)" in m for m in messages)

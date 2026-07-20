@@ -5,7 +5,7 @@ description = "A local GIF library with click-to-copy"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
@@ -30,6 +30,15 @@ dev = [
     "pytest>=8.3",
     "ruff>=0.8",
 ]
+# Not in `dev`: these pull browser engines, and the hermetic suite must stay
+# installable and runnable without them. Pinned together because
+# pytest-playwright and playwright are versioned in lockstep, and because the
+# engines on disk have to match the library that drives them.
+browser = [
+    "pytest>=8.3",
+    "playwright==1.49.0",
+    "pytest-playwright==0.5.2",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -41,6 +50,11 @@ packages = ["src/gifhole"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+# The support floor, not the development version. Without this ruff assumes the
+# running interpreter and will happily rewrite code into syntax that 3.11
+# cannot parse, which nothing else here would catch until a user on Debian
+# stable tried to install it.
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

@@ -163,40 +163,33 @@ button.primary {
   font-weight: bold;
 }
 
-/* -- tag list -------------------------------------------------------------- */
-
-.tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  margin-top: 10px;
-  font-size: 13px;
+/* A disabled control should read as disabled, not just refuse the click. */
+button[disabled] {
+  opacity: 0.45;
+  cursor: default;
+  filter: none;
 }
 
-.tag {
+button[disabled]:active {
+  transform: none;
+}
+
+/* An ambient prompt, not a button-button: a quiet link by the Library control
+   that only appears when there are dupes to review. Warm accent on the count,
+   never a filled loud thing. */
+.dupealert {
   background: none;
   border: none;
-  padding: 0;
-  color: var(--link);
+  padding: 0 0 0 4px;
+  font-size: 12px;
+  color: var(--link-hot);
   text-decoration: var(--link-decoration);
   cursor: pointer;
-  font: inherit;
 }
 
-.tag:hover {
-  color: var(--link-hot);
-}
-
-.tag[aria-pressed="true"] {
-  color: var(--link-hot);
-  font-weight: bold;
-}
-
-.tag .n {
-  color: var(--muted);
-  text-decoration: none;
-  margin-left: 2px;
-  font-size: 11px;
+.dupealert:hover {
+  filter: none;
+  opacity: 0.75;
 }
 
 .hint {
@@ -206,45 +199,93 @@ button.primary {
   font-style: italic;
 }
 
-/* -- job strip ------------------------------------------------------------- */
+/* -- the process console --------------------------------------------------- */
 
-.jobs {
-  margin-top: 8px;
+/* A docked terminal, not a modal: it slides up from the bottom edge, spans the
+   width, and leaves the page usable behind it. Off by default; ` / ~ toggles.
+   Deliberately plain and dense, the "nerdy" view the ambient rail is not. */
+.console {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 240px;
+  max-height: 60vh;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  font-size: 12px;
-  color: var(--muted);
+  background: var(--panel);
+  border-top: 1px solid var(--rule);
+  box-shadow: 0 -6px 20px rgb(0 0 0 / 18%);
+  color: var(--panel-ink);
+  z-index: 6;
+  font: 12px/1.5 var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
 }
 
-.jobs .job {
+.console-bar {
   display: flex;
-  gap: 8px;
   align-items: baseline;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--rule);
 }
 
-.jobs .kind {
+.console-title {
   font-variant: small-caps;
-  font-size: 12px;
-  min-width: 52px;
+  letter-spacing: 0.04em;
+}
+
+.console-hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.console-spacer {
+  flex: 1;
+}
+
+/* The queued-batch count sits next to its stop button, and turns warm when
+   there is a costly run to stop. */
+.console-queue {
+  color: var(--link-hot);
+  font-size: 11px;
+  font-variant: small-caps;
+}
+
+.console-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+  /* Newest at the bottom, like a terminal: the log scrolls up and the eye
+     stays at the foot where the next line lands. */
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.console-line {
+  display: grid;
+  grid-template-columns: 62px 74px minmax(0, 1fr);
+  gap: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.console-line .t {
   color: var(--muted);
 }
 
-.jobs .job.running .kind,
-.jobs .job.queued .kind {
+.console-line .src {
   color: var(--link);
+  font-variant: small-caps;
 }
 
-.jobs .job.error .kind,
-.jobs .job.error .detail {
+.console-line.warn .msg {
   color: var(--link-hot);
 }
 
-.jobs .what {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 42ch;
+.console-line.error .src,
+.console-line.error .msg {
+  color: var(--link-hot);
 }
 
 /* -- the wall of GIFs ------------------------------------------------------ */
@@ -454,9 +495,6 @@ button.primary {
   color: var(--link-hot);
 }
 
-.footspacer {
-  flex: 1;
-}
 
 /* -- keyboard help --------------------------------------------------------- */
 
@@ -560,7 +598,9 @@ button.primary {
   padding: 5px 8px;
   display: flex;
   gap: 6px;
-  align-items: baseline;
+  /* center, not baseline: the 12px mark checkbox and the "x" sit on the text
+     midline instead of hanging low, which every card was repeating. */
+  align-items: center;
   font-size: 13px;
   color: var(--panel-ink);
 }
@@ -742,9 +782,30 @@ button.primary {
   font-style: italic;
 }
 
+/* Muted, not bold blue: a destructive control repeated on every card should
+   recede until reached for. Still goes hot-red on hover (shared rule above). */
 .card .del {
   text-decoration: none;
-  font-weight: bold;
+  color: var(--panel-muted);
+}
+
+/* The undo-describe icon: a bare glyph next to "redescribe", shown only after
+   a describe changed something. Muted until hovered so it does not compete
+   with the describe link it sits beside. */
+.card .undo {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--panel-muted);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.card .undo:hover {
+  color: var(--link-hot);
 }
 
 .card .describe[disabled] {
@@ -754,30 +815,64 @@ button.primary {
 }
 
 /* OCR text / Claude descriptions: quoted, italic, faded like a footnote. */
+/* A vertical stack, not a wrapping row: the burned-in text, the description,
+   and the actions each get their own line. Cramming them into one flex-wrap
+   row squeezed the description into a tall narrow ribbon beside "read text". */
 .ocr {
-  padding: 0 8px 7px;
+  padding: 0 8px 8px;
   font-size: 11px;
   color: var(--panel-muted);
-  font-style: italic;
   display: flex;
-  gap: 6px;
-  align-items: baseline;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 5px;
 }
 
-/* Burned-in text, read locally. Not editable: it is a fact about the picture,
-   not a note about it. */
+/* The quote and its re-run / delete menu share one line; the quote takes the
+   width and truncates, the menu sits at the end when open. */
+.quoterow {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+/* Burned-in text, read locally. Not hand-edited: it is a fact about the
+   picture, not a note about it. One line, full text on hover (title). */
 .ocr .quote {
+  font-style: italic;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 100%;
 }
 
-/* The description, which Claude may write and you may rewrite. */
+.ocr .quote.clickable {
+  cursor: pointer;
+}
+
+/* The "read text" affordance on a GIF with no burned-in text yet. */
+.ocr .quote.notext {
+  font-style: normal;
+  opacity: 0.55;
+}
+
+.ocr .quote.notext:hover {
+  opacity: 1;
+}
+
+/* The little re-run / delete menu, styled like the other inline link buttons. */
+.ocr .ocrmenu {
+  display: inline-flex;
+  gap: 8px;
+  flex: none;
+}
+
+/* The description, which Claude may write and you may rewrite. Roman, not
+   italic: the curly-quoted OCR line above is already marked as a verbatim
+   citation by its italics, so the prose description reads as prose only if it
+   looks different. Two italics in a row was one grey mush. Full width so a
+   sentence wraps naturally instead of into a narrow column. */
 .ocr .desc {
-  flex: 1 1 6em;
-  min-width: 0;
   cursor: text;
   overflow-wrap: anywhere;
 }
@@ -798,36 +893,23 @@ button.primary {
   color: var(--panel-ink);
 }
 
-.empty {
+/* Describe / redescribe and the undo icon, a right-aligned action row so they
+   read as controls rather than part of the prose above them. */
+.ocrfoot {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  align-items: baseline;
+}
+
+/* Scoped to the id, not a bare .empty: a bare class this heavy (centred, 50px
+   padding) silently hijacked any card element that happened to carry an
+   "empty" class, which is exactly what mangled the OCR "read text" line. */
+#empty {
   color: var(--muted);
   text-align: center;
   padding: 50px 20px;
   font-style: italic;
-}
-
-/* -- footer ---------------------------------------------------------------- */
-
-/* The skin picker lives down here because it's a one-time novelty, not a primary
-   action, so it stays out of the toolbar. */
-footer {
-  margin-top: 40px;
-  padding-top: 12px;
-  border-top: 1px solid var(--rule);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-footer .skinlabel {
-  font-variant: small-caps;
-  letter-spacing: 0.04em;
-}
-
-footer select {
-  font-size: 11px;
-  padding: 2px 4px;
 }
 
 /* -- selection screen ------------------------------------------------------ */
@@ -1269,6 +1351,13 @@ footer select {
   color: var(--panel-ink);
 }
 
+/* The field label: a quiet caption before the select, not a heading. */
+.libfieldlabel {
+  font-size: 12px;
+  color: var(--panel-muted);
+  font-variant: small-caps;
+}
+
 button.danger {
   color: var(--link-hot);
 }
@@ -1285,14 +1374,6 @@ button.danger {
 .linkish.armed {
   box-shadow: none;
   text-decoration: underline;
-}
-
-/* The stop control sits at the end of the job strip, so a long run always has
-   a way out in the one place you are already watching it. */
-.jobs .stoprow {
-  border-top: 1px dotted var(--rule);
-  padding-top: 3px;
-  margin-top: 1px;
 }
 
 /* Looks like a bookmark to drag, not a button to press. */

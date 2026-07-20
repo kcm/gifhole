@@ -529,6 +529,15 @@ read from disk per request and need no restart, only a browser refresh.
 What has and hasn't been exercised, so you know where you are on your own. Each
 is a reasonable thing to pick up; none is load-bearing for the rest.
 
+- **Duplicate detection now surfaces false positives as well as real
+  duplicates.** Multi-frame matching catches re-encodes the old single-frame
+  hash missed, but the min-over-frames also pairs some unrelated GIFs that
+  happen to share a near frame. Everything is shown for confirmation and
+  nothing is auto-removed, so the cost is a glance; tuning the threshold or the
+  match rule to cut the noise is a known TODO.
+- **The grid renders every GIF at once; there is no pagination yet.** Fine to
+  several thousand on a modern machine, but a very large library will render
+  slowly. Pagination or windowing is a known TODO.
 - **Imgur works through the bookmarklet, not through *Grab URL*.** Pasting an
   Imgur page URL still fails: it serves a 5 KB JavaScript shell with no Open
   Graph tags and nothing to scrape. The bookmarklet runs inside the rendered

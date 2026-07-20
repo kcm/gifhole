@@ -2,12 +2,25 @@ const $ = (sel) => document.querySelector(sel);
 const grid = $("#grid");
 const search = $("#search");
 const sortSel = $("#sort");
-const tagBar = $("#tags");
 const empty = $("#empty");
 const drop = $("#drop");
+const dupeAlert = $("#dupealert");
 
 let state = { gifs: [], tags: [], root: "" };
 let activeTags = new Set();
+
+// Which model describe uses, remembered per browser like the theme. Empty means
+// "let the server pick its default", so a fresh install needs no choice. Sent
+// with every describe request; the picker in the library panel sets it.
+const MODEL_KEY = "gifhole-model";
+const chosenModel = () => localStorage.getItem(MODEL_KEY) || "";
+
+// The pre-describe description and tags for a GIF, captured when "describe" is
+// clicked, keyed by id. Survives the reload that lands the new values (this map
+// is module-level, the cards are not), so a re-render can offer an undo when
+// the describe changed something. Transient by design: a page reload clears it,
+// which is fine for an "oops, put it back" affordance.
+const describeUndo = new Map();
 let capabilities = { ocr: false, enrich: false, ffmpeg: false };
 
 // ---------------------------------------------------------------- clipboard
@@ -140,10 +153,19 @@ function card(gif) {
       <ul class="ac" hidden></ul>
     </div>
     <div class="ocr">
-      <span class="quote"></span>
+      <div class="quoterow">
+        <span class="quote"></span>
+        <span class="ocrmenu" hidden>
+          <button class="ocrrerun linkish">re-run</button>
+          <button class="ocrdelete linkish">delete</button>
+        </span>
+      </div>
       <span class="desc" contenteditable="plaintext-only" spellcheck="false"
             data-placeholder="add a description"></span>
-      <button class="describe" title="describe with Claude">describe</button>
+      <div class="ocrfoot">
+        <button class="undo" title="undo describe, restore the previous text and tags" hidden>↶</button>
+        <button class="describe" title="describe with Claude">describe</button>
+      </div>
     </div>`;
 
   el.querySelector("img").src = gif.url;
@@ -155,8 +177,60 @@ function card(gif) {
   // rewrite. Showing only one (which this used to do) hid the description
   // entirely on any GIF with text in it.
   const quote = el.querySelector(".quote");
-  quote.textContent = gif.ocr_text ? `“${gif.ocr_text}”` : "";
-  quote.hidden = !gif.ocr_text;
+  const hasText = !!gif.ocr_text;
+  quote.textContent = hasText ? `“${gif.ocr_text}”` : "read text";
+  // Full text on hover, since the line truncates; and a hint on the empty one.
+  quote.title = hasText ? gif.ocr_text : "no burned-in text read; click to re-run OCR";
+  quote.classList.toggle("notext", !hasText);
+  // Shown when there is text to read, or when there is an engine to read it
+  // with, so a GIF whose text you deleted can still be re-read. Read-only
+  // guests see the text but get no controls.
+  quote.hidden = !hasText && !capabilities.ocr;
+
+  // Clicking the text opens a little re-run / delete menu, the way the undo
+  // icon works. Re-run needs an engine; delete only makes sense with text.
+  const ocrmenu = el.querySelector(".ocrmenu");
+  const ocrRerun = el.querySelector(".ocrrerun");
+  const ocrDelete = el.querySelector(".ocrdelete");
+  if (capabilities.read_only) {
+    ocrmenu.remove();
+  } else {
+    ocrRerun.hidden = !capabilities.ocr;
+    ocrRerun.title = capabilities.ocr ? "" : "no OCR engine";
+    ocrDelete.hidden = !hasText;
+    quote.classList.add("clickable");
+    quote.addEventListener("click", () => {
+      ocrmenu.hidden = !ocrmenu.hidden;
+    });
+    ocrRerun.addEventListener("click", async () => {
+      ocrmenu.hidden = true;
+      const res = await fetch(`/api/gifs/${gif.id}/ocr`, { method: "POST" });
+      if (res.ok) {
+        toast("re-reading text…");
+        pollJobs();
+      } else {
+        toast(`re-read failed: ${(await res.json()).detail || res.status}`);
+      }
+    });
+    ocrDelete.addEventListener("click", async () => {
+      ocrmenu.hidden = true;
+      try {
+        const res = await fetch(`/api/gifs/${gif.id}/ocr`, { method: "DELETE" });
+        if (!res.ok) throw new Error(res.status);
+        // Update this card in place rather than reloading the grid: instant,
+        // and it does not depend on a re-fetch landing. Reloading also risked
+        // dropping the card if the current search matched the text just
+        // deleted. Mirrors the render's empty branch.
+        gif.ocr_text = "";
+        quote.textContent = "read text";
+        quote.classList.add("notext");
+        ocrDelete.hidden = true;
+        toast("text deleted");
+      } catch (err) {
+        toast(`delete failed: ${err.message}`);
+      }
+    });
+  }
 
   const desc = el.querySelector(".desc");
   desc.textContent = gif.description;
@@ -168,6 +242,9 @@ function card(gif) {
     const text = desc.textContent.trim();
     if (text === gif.description) return;
     gif.description = text;
+    // A hand edit supersedes the last describe, so its undo is stale: it would
+    // revert this edit too, which is not what "undo describe" should mean.
+    describeUndo.delete(gif.id);
     patch(gif.id, { description: text });
   };
   desc.addEventListener("keydown", (e) => {
@@ -187,17 +264,54 @@ function card(gif) {
   desc.addEventListener("blur", saveDesc);
 
   const describe = el.querySelector(".describe");
+  const undo = el.querySelector(".undo");
   if (describe) {
   describe.disabled = !capabilities.enrich;
   if (!capabilities.enrich) describe.title = capabilities.enrich_reason || "unavailable";
-  if (gif.description && gif.ocr_text) describe.textContent = "redescribe";
+  if (gif.description || gif.tags.length) describe.textContent = "redescribe";
   describe.addEventListener("click", async () => {
     describe.disabled = true;
-    const res = await fetch(`/api/gifs/${gif.id}/enrich`, { method: "POST" });
-    if (res.ok) toast("describing…");
-    else toast(`describe failed: ${(await res.json()).detail || res.status}`);
+    // Snapshot what describe is about to overwrite, so the undo below can put
+    // it back. Captured now, compared after the job lands: if nothing changed,
+    // the button stays hidden.
+    describeUndo.set(gif.id, { description: gif.description, tags: [...gif.tags] });
+    const res = await fetch(`/api/gifs/${gif.id}/enrich`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: chosenModel() }),
+    });
+    if (res.ok) {
+      toast("describing…");
+    } else {
+      describeUndo.delete(gif.id);
+      toast(`describe failed: ${(await res.json()).detail || res.status}`);
+    }
     pollJobs();
   });
+
+  // Offered only when the last describe actually changed this GIF. The snapshot
+  // is the pre-describe state; if it differs from what is on screen now, the
+  // describe changed something and can be undone.
+  const before = describeUndo.get(gif.id);
+  const changed =
+    before &&
+    (before.description !== gif.description ||
+      before.tags.join(" ") !== gif.tags.join(" "));
+  if (changed) {
+    undo.hidden = false;
+    undo.addEventListener("click", async () => {
+      undo.disabled = true;
+      try {
+        await patch(gif.id, { description: before.description, tags: before.tags.join(" ") });
+        describeUndo.delete(gif.id);
+        toast("describe undone");
+        load();
+      } catch (err) {
+        undo.disabled = false;
+        toast(`undo failed: ${err.message}`);
+      }
+    });
+  }
   }
 
   const name = el.querySelector(".name");
@@ -212,8 +326,6 @@ function card(gif) {
   // open for the next one, and nothing here calls load(). A full reload per tag
   // would refetch the library and rebuild every card, losing scroll position
   // and focus mid-file.
-  tagEditor(el, gif);
-
   if (capabilities.read_only) {
     // Copying still works, which is the point of sharing a library at all.
     for (const sel of [".mark", ".del", ".describe", ".taginput"]) {
@@ -222,6 +334,12 @@ function card(gif) {
     el.querySelector(".name")?.setAttribute("contenteditable", "false");
     el.querySelector(".desc")?.setAttribute("contenteditable", "false");
   }
+
+  // After the stripping, not before: tagEditor has a read-only branch that
+  // renders chips without their remove buttons, and it only reaches it when
+  // the field is already gone. Wiring first left guests with live x buttons
+  // on a PATCH that would 403.
+  tagEditor(el, gif);
   el.querySelector(".mark")?.addEventListener("click", () => toggleMark(gif.id));
   // No confirm on a single delete: it goes to the trash and "z" takes it
   // straight back, so asking every time costs more than the mistake does.
@@ -249,7 +367,6 @@ function bumpTag(tag, delta) {
     state.tags.push({ tag, count: 1 });
   }
   state.tags.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
-  renderTags();
 }
 
 // Mirrors split_tags() on the server, so what you see on the chip is what got
@@ -448,6 +565,8 @@ function tagEditor(el, gif) {
   let pending = Promise.resolve();
   const save = () => {
     gif.tags = [...tags];
+    // A hand edit supersedes the last describe (see saveDesc).
+    describeUndo.delete(gif.id);
     const body = { tags: tags.join(" ") };
     pending = pending.then(() => patch(gif.id, body));
     return pending;
@@ -523,25 +642,6 @@ function tagEditor(el, gif) {
   });
 
   renderChips();
-}
-
-function renderTags() {
-  tagBar.replaceChildren(
-    ...state.tags.map(({ tag, count }) => {
-      const b = document.createElement("button");
-      b.className = "tag";
-      b.setAttribute("aria-pressed", activeTags.has(tag));
-      const n = document.createElement("span");
-      n.className = "n";
-      n.textContent = count;
-      b.append(tag, n);
-      b.addEventListener("click", () => {
-        activeTags.has(tag) ? activeTags.delete(tag) : activeTags.add(tag);
-        load();
-      });
-      return b;
-    }),
-  );
 }
 
 // ------------------------------------------------------------------ selection
@@ -662,7 +762,6 @@ function render() {
     : search.value || activeTags.size
       ? "nothing matches"
       : `no GIFs yet. Drop some here, or put them in ${state.root_display || state.root}`;
-  renderTags();
 }
 
 async function load() {
@@ -983,18 +1082,27 @@ let pickState = [];
 function refreshPickCount() {
   const on = pickState.filter((p) => p.on).length;
   pickCount.textContent = `${on} of ${pickState.length} selected`;
+  // Import needs something to import; the two select buttons disarm when they
+  // would do nothing (nothing to clear, or nothing left to select).
   $("#pickgo").disabled = on === 0;
+  $("#picknone").disabled = on === 0;
+  $("#pickall").disabled = on === pickState.length;
 }
 
-function openPicker(candidates) {
-  // Everything starts ticked: a page URL means the whole page unless you say
-  // otherwise. "select none" is one click away.
-  pickState = candidates.map((c) => ({ ...c, on: true }));
+function openPicker(candidates, { heroOnly = false } = {}) {
+  // Grab URL means the whole page unless you say otherwise, so everything
+  // starts ticked. The bookmarklet passes heroOnly: a single GIF's page hands
+  // us the main GIF plus its size variants, so only the first (the hero, the
+  // og:image / server candidate, which sorts first) is ticked, and the rest
+  // wait for a click. There is no reliable way to tell those size variants
+  // apart from genuinely different GIFs here, so we import them all but do not
+  // pre-select them.
+  pickState = candidates.map((c, i) => ({ ...c, on: heroOnly ? i === 0 : true }));
 
   pickGrid.replaceChildren(
     ...pickState.map((item, i) => {
       const cell = document.createElement("article");
-      cell.className = "pick on";
+      cell.className = item.on ? "pick on" : "pick";
 
       const fig = document.createElement("figure");
       // Load straight from the source. The scraped URLs carry live signatures
@@ -1034,7 +1142,7 @@ function openPicker(candidates) {
       row.className = "row";
       const box = document.createElement("input");
       box.type = "checkbox";
-      box.checked = true;
+      box.checked = item.on;
       const name = document.createElement("span");
       name.className = "name";
       name.textContent = item.url.split("/").pop().split("?")[0];
@@ -1259,70 +1367,54 @@ $("#rescan").addEventListener("click", async () => {
 // OCR and scraping run on the server's worker thread, so the UI polls. Polling
 // stops once nothing is active, and any finished work triggers one reload so
 // new GIFs and freshly-read text appear without a manual refresh.
-const jobBar = $("#jobs");
 let jobTimer = null;
 let lastActive = 0;
 const jobStatus = new Map();
 
-function renderJobs(jobs) {
-  const interesting = jobs.filter(
-    (j) => j.status === "queued" || j.status === "running" || j.status === "error",
-  );
-  jobBar.hidden = interesting.length === 0;
-  jobBar.replaceChildren(
-    ...interesting.slice(0, 6).map((j) => {
-      const row = document.createElement("div");
-      row.className = `job ${j.status}`;
-      const kind = document.createElement("span");
-      kind.className = "kind";
-      kind.textContent = j.status === "error" ? "failed" : j.kind;
-      const what = document.createElement("span");
-      what.className = "what";
-      what.textContent = j.label;
-      const detail = document.createElement("span");
-      detail.className = "detail";
-      detail.textContent = j.status === "error" ? j.detail : "";
-      row.append(kind, what, detail);
-      return row;
-    }),
-  );
-
-  // A queue is the only place a long run is visible, so it is where stopping
-  // one belongs. Only offered when something is actually waiting: with just
-  // one job running there is nothing left to stop.
-  const waiting = interesting.filter((j) => j.status === "queued").length;
-  if (waiting) {
-    const stop = document.createElement("div");
-    stop.className = "job stoprow";
-    const label = document.createElement("span");
-    label.className = "kind";
-    label.textContent = "queued";
-    const count = document.createElement("span");
-    count.className = "what";
-    count.textContent = `${waiting} waiting`;
-    const button = document.createElement("button");
-    button.className = "linkish";
-    button.textContent = "stop the rest";
-    button.addEventListener("click", async () => {
-      button.disabled = true;
-      try {
-        const out = await postJSON("/api/jobs/cancel", {});
-        // Says "the rest" everywhere because the running one is not killed.
-        toast(out.cancelled ? `stopped ${out.cancelled} queued` : "nothing left to stop");
-      } catch (err) {
-        toast(`could not stop: ${err.message}`);
-      }
-      pollJobs();
-    });
-    stop.append(label, count, button);
-    jobBar.append(stop);
-  }
+// The queued-batch stop control. It lives in the console rather than in an
+// always-on strip: the console is where a long run is watched, so it is where
+// stopping one belongs. Only surfaced when something is actually waiting; with
+// one job running there is nothing left to stop but the promise that matters
+// ("stop spending on the other 150") still holds.
+function updateStopControl(jobs) {
+  const waiting = jobs.filter((j) => j.status === "queued").length;
+  consoleQueue.hidden = !waiting;
+  consoleStop.hidden = !waiting;
+  if (waiting) consoleQueue.textContent = `${waiting} queued`;
 }
+
+// An ambient prompt by the Library button: "possible dupes: N", updated from
+// the poll, hidden at zero and for read-only guests (reviewing a dup is a
+// write). null means the background scan has not finished yet, so leave the
+// prompt as it is rather than flashing it away.
+function updateDupeAlert(count) {
+  if (count === null || count === undefined) return;
+  const show = count > 0 && !capabilities.read_only;
+  dupeAlert.hidden = !show;
+  if (show) dupeAlert.textContent = `possible dupes: ${count}`;
+}
+
+dupeAlert.addEventListener("click", async () => {
+  toast("looking for duplicates…");
+  let groups;
+  try {
+    groups = (await (await fetch("/api/duplicates")).json()).groups;
+  } catch {
+    return toast("could not check for duplicates");
+  }
+  if (!groups.length) return toast("no duplicates found");
+  showExistingDupes(groups);
+});
 
 async function pollJobs() {
   let body;
   try {
-    body = await (await fetch("/api/jobs")).json();
+    const res = await fetch("/api/jobs");
+    // A 401 or a 502 answers with an error body, and reading that as data left
+    // capabilities undefined, threw before resolveCaps(), and stranded load()
+    // on a promise that never settled: a permanently blank wall, no message.
+    if (!res.ok) throw new Error(res.status);
+    body = await res.json();
   } catch {
     // A failed poll must never strand capsLoaded: load() awaits it, so an
     // unresolved promise would leave the grid permanently empty.
@@ -1330,10 +1422,11 @@ async function pollJobs() {
     jobTimer = setTimeout(pollJobs, 2000);
     return;
   }
-  capabilities = body.capabilities;
+  capabilities = body.capabilities || {};
   applyReadOnly();
   resolveCaps();
-  renderJobs(body.jobs);
+  updateStopControl(body.jobs);
+  updateDupeAlert(body.duplicates);
 
   // Reload as soon as an import or description lands. Waiting for the whole
   // queue to drain meant newly imported GIFs stayed invisible until every
@@ -1368,6 +1461,111 @@ function applyReadOnly() {
     if (el) el.hidden = readOnly;
   }
 }
+
+// ------------------------------------------------------------- process console
+//
+// A docked terminal fed by /api/log, toggled with ` / ~. The rail says whether
+// work is happening; this says what each step is. It is a cursor-based tail: on
+// open it back-fills whatever the server still has buffered, then follows. Kept
+// separate from pollJobs so it only polls while it is actually on screen.
+const consolePanel = $("#console");
+const consoleLog = $("#consolelog");
+const consoleQueue = $("#consolequeue");
+const consoleStop = $("#consolestop");
+const CONSOLE_KEY = "gifhole-console";
+const CONSOLE_MAX_LINES = 500;
+let consoleCursor = 0;
+let consoleTimer = null;
+
+const consoleOpen = () => !consolePanel.hidden;
+
+function openConsole() {
+  consolePanel.hidden = false;
+  localStorage.setItem(CONSOLE_KEY, "1");
+  pollConsole();
+}
+
+function closeConsole() {
+  consolePanel.hidden = true;
+  localStorage.removeItem(CONSOLE_KEY);
+  clearTimeout(consoleTimer);
+  consoleTimer = null;
+}
+
+function toggleConsole() {
+  consoleOpen() ? closeConsole() : openConsole();
+}
+
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function stamp(t) {
+  const d = new Date(t * 1000);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+
+function appendConsole(events) {
+  if (!events.length) return;
+  // Follow the tail only if the reader is already at it. Someone scrolled up to
+  // read history should not get yanked back down every time a line lands.
+  const atBottom =
+    consoleLog.scrollTop + consoleLog.clientHeight >= consoleLog.scrollHeight - 4;
+  for (const e of events) {
+    const line = document.createElement("div");
+    line.className = `console-line ${e.level || "info"}`;
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = stamp(e.t);
+    const src = document.createElement("span");
+    src.className = "src";
+    src.textContent = e.source;
+    const msg = document.createElement("span");
+    msg.className = "msg";
+    msg.textContent = e.message;
+    line.append(t, src, msg);
+    consoleLog.append(line);
+  }
+  while (consoleLog.childElementCount > CONSOLE_MAX_LINES) {
+    consoleLog.firstElementChild.remove();
+  }
+  if (atBottom) consoleLog.scrollTop = consoleLog.scrollHeight;
+}
+
+async function pollConsole() {
+  if (!consoleOpen()) return;
+  try {
+    const res = await fetch(`/api/log?since=${consoleCursor}`);
+    if (res.ok) {
+      const body = await res.json();
+      consoleCursor = body.cursor;
+      appendConsole(body.events);
+    }
+  } catch {
+    // A dropped poll is not worth a toast; the next tick retries.
+  }
+  clearTimeout(consoleTimer);
+  if (consoleOpen()) consoleTimer = setTimeout(pollConsole, 900);
+}
+
+$("#consoleclose").addEventListener("click", closeConsole);
+$("#consoleclear").addEventListener("click", () => consoleLog.replaceChildren());
+consoleStop.addEventListener("click", async () => {
+  consoleStop.disabled = true;
+  try {
+    const out = await postJSON("/api/jobs/cancel", {});
+    // "the rest" because the running job is deliberately left to finish.
+    toast(out.cancelled ? `stopped ${out.cancelled} queued` : "nothing left to stop");
+  } catch (err) {
+    toast(`could not stop: ${err.message}`);
+  }
+  consoleStop.disabled = false;
+  pollJobs();
+});
+
+// Remembered per browser: a nerdy view someone turned on should still be on
+// after a reload, without nagging everyone else with it.
+if (localStorage.getItem(CONSOLE_KEY) === "1") openConsole();
 
 // ---------------------------------------------------------------- chrome
 
@@ -1425,8 +1623,16 @@ function paintScopeCount() {
 }
 
 async function openLibrary() {
+  // Declared out here on purpose: scoped to the try, `body` was a
+  // ReferenceError at the template below and the panel never opened, which
+  // took the bookmarklet, bulk describe, duplicates and trash with it. The
+  // status check matters for the same reason as in pollJobs(): an error body
+  // parses as JSON perfectly well and then reads as missing data.
+  let body;
   try {
-    const body = await (await fetch("/api/library")).json();
+    const res = await fetch("/api/library");
+    if (!res.ok) throw new Error(res.status);
+    body = await res.json();
     libStats = body.stats;
   } catch {
     return toast("could not read the library. Is the server running the current code?");
@@ -1440,7 +1646,60 @@ async function openLibrary() {
     `gifhole ${body.version} · ${plural(s.total, "GIF")} · ${mb} · ` +
     `${plural(s.tags, "tag")} · ${s.described} described`;
   paintScopeCount();
+  // Re-read needs an engine and something to read. Disabled rather than hidden,
+  // with the reason in the tooltip, so it reads as "not now" not "gone".
+  const reocr = $("#libreocr");
+  reocr.disabled = !capabilities.ocr || !s.total;
+  reocr.title = capabilities.ocr
+    ? "re-read burned-in text for every GIF, picking up OCR improvements"
+    : "no OCR engine (macOS Vision, or install tesseract)";
+  loadModelPicker();
   libPanel.hidden = false;
+}
+
+// The model picker, populated live from the account so it never lists a model
+// your key cannot use, or misses a new one. Fetched when the panel opens (a
+// writer context, and the route is writer-only), not at page load.
+async function loadModelPicker() {
+  const sel = $("#libmodel");
+  const row = sel.parentElement;
+  if (!capabilities.enrich) {
+    // No key, no describe, so no choice to make. Hide the row rather than show
+    // an empty select.
+    row.hidden = true;
+    return;
+  }
+  row.hidden = false;
+  let body;
+  try {
+    const res = await fetch("/api/models");
+    if (!res.ok) throw new Error(res.status);
+    body = await res.json();
+  } catch {
+    row.hidden = true;
+    return;
+  }
+  const models = body.models || [];
+  if (!models.length) {
+    row.hidden = true;
+    return;
+  }
+  const current = chosenModel() || body.default;
+  sel.replaceChildren(
+    ...models.map((m) => {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = m.id === body.default ? `${m.name} (default)` : m.name;
+      if (m.id === current) opt.selected = true;
+      return opt;
+    }),
+  );
+  // Store only a deliberate choice, and only when it differs from the default,
+  // so the default can keep moving with the server without a stale pin.
+  sel.onchange = () => {
+    if (sel.value === body.default) localStorage.removeItem(MODEL_KEY);
+    else localStorage.setItem(MODEL_KEY, sel.value);
+  };
 }
 
 // Built from location.origin, so it points at wherever this instance actually
@@ -1507,8 +1766,10 @@ $("#libdescribe").addEventListener("click", async () => {
   }
   closeLibrary();
   try {
-    const out = await postJSON("/api/gifs/describe", { scope });
-    toast(`describing ${out.queued} · watch the job strip`);
+    const out = await postJSON("/api/gifs/describe", { scope, model: chosenModel() });
+    // Points at the console because that is where the run is now watched and
+    // where a costly batch is stopped.
+    toast(`describing ${out.queued} · press ~ to watch or stop`);
     pollJobs();
   } catch (err) {
     toast(`describe failed: ${err.message}`);
@@ -1518,6 +1779,16 @@ $("#libdescribe").addEventListener("click", async () => {
 $("#librescan").addEventListener("click", () => {
   closeLibrary();
   $("#rescan").click();
+});
+$("#libreocr").addEventListener("click", async () => {
+  closeLibrary();
+  try {
+    const out = await postJSON("/api/gifs/reocr", {});
+    toast(`re-reading text for ${plural(out.queued, "GIF")} · press ~ to watch`);
+    pollJobs();
+  } catch (err) {
+    toast(`re-read failed: ${err.message}`);
+  }
 });
 $("#libtrash").addEventListener("click", () => {
   closeLibrary();
@@ -1699,7 +1970,7 @@ async function describeIds(ids) {
     return;
   }
   try {
-    const out = await postJSON("/api/gifs/describe", { ids });
+    const out = await postJSON("/api/gifs/describe", { ids, model: chosenModel() });
     const skipped = out.skipped ? `, skipped ${out.skipped} already described` : "";
     toast(out.queued ? `describing ${out.queued}${skipped}` : `nothing to do${skipped}`);
     pollJobs();
@@ -1759,6 +2030,15 @@ $("#clearall").addEventListener("click", async () => {
   load();
 });
 
+// What a look-but-not-touch visitor may still do: move around, copy, search,
+// and read the help.
+const READ_ONLY_KEYS = new Set([
+  "h", "j", "k", "l", "ArrowLeft", "ArrowDown", "ArrowUp", "ArrowRight",
+  "Home", "End", "Enter", "c", "u", "p", "/", "?", "s", "Escape",
+  // The console only reads the log, which a guest is allowed to see.
+  "`", "~",
+]);
+
 const help = $("#help");
 const closeHelp = () => (help.hidden = true);
 const toggleHelp = () => (help.hidden = !help.hidden);
@@ -1811,6 +2091,18 @@ addEventListener("keydown", (e) => {
   // Shortcuts are bare letters, so they must not fire mid-word in a tag field,
   // a rename or the search box. Modified keys belong to the browser.
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+
+  // A guest has no write controls on screen, so the keyboard must not offer
+  // what the interface took away. The server refuses anyway, but "a button
+  // that returns 403 is worse than one that is not there" applies to keys too.
+  if (capabilities.read_only && !READ_ONLY_KEYS.has(e.key)) return;
+
+  // The process console, ` or ~ (with or without shift). A view, not an
+  // action, so it is offered to guests too.
+  if (e.key === "`" || e.key === "~") {
+    e.preventDefault();
+    return toggleConsole();
+  }
 
   // "?" is shift+/ on most layouts, so it has to be tested before "/".
   if (e.key === "?") {
@@ -1915,13 +2207,24 @@ const looksLikeVideo = (url) => /\.(mp4|webm)(\?|$)/i.test(url);
 // itself, in the fragment.
 async function handleAddFragment() {
   if (!location.hash.startsWith("#add=")) return;
+  // Cleared before anything can bail out. A rejected fragment used to stay in
+  // the address bar, so every reload re-toasted the same complaint, and a
+  // second press of the bookmarklet with the same payload fired no
+  // hashchange at all because the hash had not changed.
+  const raw = location.hash.slice(5);
+  history.replaceState(null, "", location.pathname + location.search);
+
   let payload;
   try {
-    payload = JSON.parse(decodeURIComponent(location.hash.slice(5)));
+    payload = JSON.parse(decodeURIComponent(raw));
   } catch {
     return toast("that bookmark sent something unreadable");
   }
-  history.replaceState(null, "", location.pathname + location.search);
+  // JSON.parse("null") is a successful parse, and the property reads below
+  // would then throw somewhere nothing is listening.
+  if (!payload || typeof payload !== "object") {
+    return toast("that bookmark sent something unreadable");
+  }
 
   toast("looking…");
   const candidates = [];
@@ -1959,7 +2262,9 @@ async function handleAddFragment() {
 
   if (!candidates.length) return toast("nothing to import from that page");
   if (candidates.length === 1) return importUrls(candidates);
-  openPicker(candidates);
+  // heroOnly: a bookmarklet press usually lands on one GIF's page, which hands
+  // us that GIF plus its size variants; pre-select only the main one.
+  openPicker(candidates, { heroOnly: true });
 }
 
 load();

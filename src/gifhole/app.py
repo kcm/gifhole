@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from gifhole import __version__, clipboard, fetch, ocr
 from gifhole.jobs import JobQueue
+from gifhole.logbus import LogBus
 from gifhole.store import Store, split_tags
 
 log = logging.getLogger(__name__)
@@ -21,9 +22,28 @@ log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
+def _same_secret(offered: str, expected: str) -> bool:
+    """Constant-time comparison that cannot be crashed by the input.
+
+    compare_digest raises TypeError on a non-ASCII str, and this runs before
+    authentication on every request, so `?token=%C3%A9` was a 500 anyone could
+    trigger. Comparing bytes removes the crash without weakening the timing
+    property.
+    """
+    if not offered or not expected:
+        return False
+    return secrets.compare_digest(offered.encode("utf-8"), expected.encode("utf-8"))
+
+
 def _bearer(header: str) -> str:
     scheme, _, value = header.partition(" ")
     return value.strip() if scheme.lower() == "bearer" else ""
+
+
+def _clip(text: str, limit: int = 100) -> str:
+    """One line, trimmed, for a console message. OCR text can be long."""
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
@@ -53,7 +73,7 @@ READ_ONLY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # server fetch a URL chosen by the caller, so leaving it open would be an open
 # proxy on someone else's bandwidth and IP. It exists only to preview import
 # candidates, which is a writer's flow, so it is treated as a write.
-WRITER_ONLY_PATHS = ("/api/preview",)
+WRITER_ONLY_PATHS = ("/api/preview", "/api/models")
 
 
 def needs_a_writer(method: str, path: str) -> bool:
@@ -105,6 +125,7 @@ def create_app(
     store = Store(root or default_root())
     store.rescan()
     jobs = JobQueue()
+    bus = LogBus()
 
     # Preview/import staging. Cleared on start so it can't grow without bound.
     staging_dir = store.root / ".staging"
@@ -117,10 +138,12 @@ def create_app(
     app = FastAPI(title="gifhole", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.jobs = jobs
+    app.state.bus = bus
 
-    # Registered after the cross-site check, so it runs before it: an
-    # unauthenticated request should be refused for that reason, not sorted
-    # into CSRF categories first.
+    # Starlette runs the last-registered middleware outermost, so the
+    # cross-site check below actually runs first and an unauthenticated
+    # cross-site write is refused as cross-site rather than as unauthenticated.
+    # That ordering is harmless; both refuse.
     @app.middleware("http")
     async def require_token(request, call_next):
         """Gate everything behind a shared token, when one is configured.
@@ -139,15 +162,21 @@ def create_app(
         if not token:
             return await call_next(request)
 
+        # An explicit `?token=` outranks the cookie, and replaces it below.
+        # Cookies ignore the port, so the owner's writer cookie for 127.0.0.1
+        # was answering for every instance on that host: opening the guest link
+        # `?token=<read token>` returned the writer's UI, which makes a share
+        # link impossible to check before sending it. It is also the only way
+        # to downgrade yourself deliberately.
         offered = (
             _bearer(request.headers.get("authorization", ""))
-            or request.cookies.get(COOKIE, "")
             or request.query_params.get("token", "")
+            or request.cookies.get(COOKIE, "")
         )
         # compare_digest, not ==, so a wrong guess takes the same time to
         # reject however much of it was right.
-        writer = bool(offered) and secrets.compare_digest(offered, token)
-        reader = bool(offered and read_token) and secrets.compare_digest(offered, read_token)
+        writer = _same_secret(offered, token)
+        reader = bool(read_token) and _same_secret(offered, read_token)
         writer_only = needs_a_writer(request.method, request.url.path)
 
         if not writer:
@@ -176,11 +205,26 @@ def create_app(
         request.state.read_only = not writer
 
         response = await call_next(request)
-        if request.query_params.get("token"):
-            # Remember it, so images and later requests carry it. HttpOnly
-            # keeps it away from any script that manages to run on the page.
+        # Only for someone who has already proved they hold a token, and the
+        # cookie carries back what they offered, never what is configured.
+        #
+        # This previously fired whenever `?token=` was merely present, and set
+        # the cookie to the *write* token. Under --public-reads an anonymous
+        # request passes the guard, so `?token=anything` collected the secret
+        # from the Set-Cookie header: one request for full write access. Under
+        # --read-token the documented onboarding link handed a guest the
+        # writer's token. HttpOnly was no defence, since the attacker is the
+        # HTTP client rather than a script.
+        if (writer or reader) and request.query_params.get("token"):
             response.set_cookie(
-                COOKIE, token, httponly=True, samesite="lax", max_age=60 * 60 * 24 * 365
+                COOKIE,
+                offered,
+                httponly=True,
+                samesite="lax",
+                # Set only over TLS, where it means something; on plain HTTP a
+                # Secure cookie would simply never be stored.
+                secure=request.url.scheme == "https",
+                max_age=60 * 60 * 24 * 365,
             )
         return response
 
@@ -203,12 +247,16 @@ def create_app(
                 return JSONResponse({"detail": "cross-origin request refused"}, status_code=403)
         return await call_next(request)
 
-    def queue_ocr(gif_id: int, filename: str) -> None:
-        """Read burned-in text in the background; failures are never fatal."""
-        if not auto_ocr or not ocr.available():
-            return
+    def submit_ocr(gif_id: int, filename: str) -> bool:
+        """Queue an OCR read, whatever the auto-OCR setting. Returns whether an
+        engine was available to do it. This is the path an explicit re-read
+        uses; `queue_ocr` is the automatic-on-add wrapper that also honours
+        `auto_ocr`."""
+        if not ocr.available():
+            return False
 
         def run(job):
+            bus.emit("ocr", f"reading text: {filename}")
             result = ocr.read_gif_text(store.gifs_dir / filename)
             if not result.available:
                 # Do NOT call set_ocr here. It stamps ocr_at, which would mark
@@ -216,16 +264,53 @@ def create_app(
                 # reporting a green job and "no text found" for what was a
                 # failure. Raising records the job as failed and leaves it
                 # eligible for a later Rescan.
+                bus.emit("ocr", f"failed: {filename}: {result.reason or 'unknown'}", level="error")
                 raise RuntimeError(f"OCR failed: {result.reason or 'unknown error'}")
             store.set_ocr(gif_id, result.text)
+            # Log the text itself, not a count. When the scoreboard/HUD filter
+            # dropped something, show the raw read too, so the cleanup is
+            # visible (this is exactly where you want to see what it removed).
+            if result.text:
+                bus.emit("ocr", f"{filename}: “{_clip(result.text)}”")
+            else:
+                bus.emit("ocr", f"{filename}: no text")
+            if result.raw and result.raw != result.text:
+                bus.emit("ocr", f"{filename}: raw was “{_clip(result.raw)}”")
             return result.text or "no text found"
 
         jobs.submit("ocr", filename, run)
+        return True
+
+    def queue_ocr(gif_id: int, filename: str) -> None:
+        """Read burned-in text on add. Honours `auto_ocr`; failures never fatal."""
+        if auto_ocr:
+            submit_ocr(gif_id, filename)
+
+    def ensure_dupe_scan() -> None:
+        """Refresh the possible-duplicates count in the background when the
+        library has changed since it was last computed, unless a scan is
+        already queued. The staleness check is a cheap SQL fingerprint
+        (`library_signature`), not a manual flag, so nothing has to remember to
+        invalidate. backfill_hashes touches only rows still on the old
+        single-frame scheme (a one-time cost per GIF)."""
+        if store._dup_signature == store.library_signature():
+            return
+        if any(j.kind == "dedupe" and j.status in ("queued", "running") for j in jobs.list_jobs()):
+            return
+
+        def run(job):
+            store.backfill_hashes()
+            store.recompute_duplicate_count()
+
+        jobs.submit("dedupe", "checking for duplicates", run)
 
     # Backfill whatever was already sitting in the folder. Without this, GIFs
     # present before first launch stay unread until someone hits Rescan.
     for existing in store.needing_ocr():
         queue_ocr(existing.id, existing.filename)
+
+    # And warm the duplicates count once at startup, in the background.
+    ensure_dupe_scan()
 
     @app.get("/")
     def index() -> FileResponse:
@@ -264,12 +349,20 @@ def create_app(
         if not force:
             matches = _duplicates_of(data, name)
             if matches:
+                # Narrate it: a drop that silently does nothing (because it was
+                # already here) is exactly the case that looked broken.
+                bus.emit("import", f"{name}: looks like a duplicate, not added")
                 return JSONResponse({"duplicate": True, "filename": name, "matches": matches})
 
         try:
             gif = store.add_bytes(name, data, tags=tags)
         except ValueError as exc:
+            bus.emit("import", f"{name}: {exc}", level="error")
             raise HTTPException(400, str(exc)) from exc
+        # Every path a GIF enters by emits here, so the console shows the import
+        # itself, not just the OCR that follows it. A dropped or pasted file
+        # went through this endpoint and used to log nothing until OCR ran.
+        bus.emit("import", f"added {gif.filename}")
         queue_ocr(gif.id, gif.filename)
         return JSONResponse(gif.as_dict(), status_code=201)
 
@@ -468,8 +561,17 @@ def create_app(
 
         def run(job):
             job.total = len(urls)
-            report = fetch.import_urls(store, urls, staging_dir, titles)
-            job.done = len(report.added)
+            bus.emit("import", f"importing {len(urls)} selected")
+
+            def progress(finished, total, label):
+                job.done = finished
+                job.detail = label
+                # label is the added filename, or "" for a skip.
+                bus.emit("import", f"added {label}" if label else f"skipped {finished}/{total}")
+
+            report = fetch.import_urls(store, urls, staging_dir, titles, on_progress=progress)
+            job.done = len(urls)
+            job.detail = ""
             # Previewing a large thread can stage hundreds of MB. The picker is
             # closed by now and nothing else reads these, so drop them rather
             # than letting staging grow for the rest of the session.
@@ -480,7 +582,9 @@ def create_app(
                     queue_ocr(gif.id, gif.filename)
             if not report.added:
                 first = report.skipped[0][1] if report.skipped else "nothing usable found"
+                bus.emit("import", first, level="error")
                 raise fetch.FetchError(first)
+            bus.emit("import", f"done: added {len(report.added)}, skipped {len(report.skipped)}")
             return f"added {len(report.added)}, skipped {len(report.skipped)}"
 
         job = jobs.submit("import", f"{len(urls)} selected", run)
@@ -493,10 +597,36 @@ def create_app(
         gif = store.get(gif_id)
         if gif is None:
             raise HTTPException(404, "no such gif")
+        if not submit_ocr(gif.id, gif.filename):
+            raise HTTPException(503, "no OCR engine available; install tesseract")
+        return JSONResponse({"ok": True})
+
+    @app.delete("/api/gifs/{gif_id}/ocr")
+    def clear_ocr(gif_id: int) -> JSONResponse:
+        """Drop a GIF's burned-in text. Marks it read (empty), so an ordinary
+        Rescan will not re-populate the garbage you just removed; a deliberate
+        per-entry re-run or the library-wide re-read still can."""
+        gif = store.get(gif_id)
+        if gif is None:
+            raise HTTPException(404, "no such gif")
+        store.set_ocr(gif_id, "")
+        bus.emit("ocr", f"cleared text: {gif.filename}")
+        return JSONResponse({"ok": True})
+
+    @app.post("/api/gifs/reocr")
+    def reread_text() -> JSONResponse:
+        """Re-read burned-in text for the whole library, replacing what is
+        there. Rescan only reads GIFs never read before; this is the tool for
+        after the OCR itself improves, so a GIF read under the old logic picks
+        up the new. Free and local, unlike describe, so it re-reads everything
+        rather than charging by the call."""
         if not ocr.available():
             raise HTTPException(503, "no OCR engine available; install tesseract")
-        queue_ocr(gif.id, gif.filename)
-        return JSONResponse({"ok": True})
+        gifs = store.list_gifs()
+        for gif in gifs:
+            submit_ocr(gif.id, gif.filename)
+        bus.emit("ocr", f"re-reading text for {len(gifs)} GIF(s)")
+        return JSONResponse({"ok": True, "queued": len(gifs)})
 
     @app.post("/api/gifs/{gif_id}/clipboard")
     def copy_to_clipboard(gif_id: int) -> JSONResponse:
@@ -525,7 +655,7 @@ def create_app(
     # that cannot succeed. Any later success clears it.
     auth_block: dict[str, str | None] = {"why": None}
 
-    def queue_enrich(gif) -> None:
+    def queue_enrich(gif, model: str | None = None) -> None:
         """Describe one GIF in the background, tagged from the live vocabulary.
 
         The vocabulary is read when the job runs, not when it is queued, so a
@@ -534,23 +664,38 @@ def create_app(
         """
         from gifhole import enrich
 
+        chosen = model or enrich.default_model()
+
         def run(job):
             if auth_block["why"]:
                 raise enrich.EnrichError(auth_block["why"])
             vocabulary = [tag for tag, _ in store.all_tags()]
+            bus.emit("describe", f"{gif.filename}: asking {chosen}")
             try:
-                result = enrich.describe_gif(store.gifs_dir / gif.filename, vocabulary=vocabulary)
+                result = enrich.describe_gif(
+                    store.gifs_dir / gif.filename, vocabulary=vocabulary, model=chosen
+                )
             except enrich.EnrichError as exc:
                 if any(w in str(exc).lower() for w in ("authentication", "api_key", "api key")):
                     auth_block["why"] = (
                         "no API key. Set ANTHROPIC_API_KEY or run `ant auth login`, then try again"
                     )
+                bus.emit("describe", f"failed: {gif.filename}: {exc}", level="error")
                 raise
             auth_block["why"] = None
             before = set(store.get(gif.id).tags if store.get(gif.id) else [])
             store.set_enrichment(gif.id, result["description"], " ".join(result["tags"]))
             after = store.get(gif.id)
             added = [t for t in (after.tags if after else []) if t not in before]
+            desc = result["description"]
+            bus.emit(
+                "describe",
+                f"{gif.filename}: “{_clip(desc)}”" if desc else f"{gif.filename}: no description",
+            )
+            bus.emit(
+                "describe",
+                f"{gif.filename}: {('tagged ' + ', '.join(added)) if added else 'no new tags'}",
+            )
             # Say what changed. A constrained vocabulary often picks tags the
             # GIF already had, which is correct but looks like nothing
             # happened unless the job says so.
@@ -559,8 +704,21 @@ def create_app(
 
         jobs.submit("describe", gif.filename, run)
 
+    def resolve_model(requested) -> str | None:
+        """Validate a picker choice against what the account actually has, so a
+        stale or hand-edited model id fails fast here rather than after the
+        images are uploaded. None means "use the default"."""
+        from gifhole import enrich
+
+        if not requested or not isinstance(requested, str):
+            return None
+        ids = {m["id"] for m in enrich.list_models()}
+        if ids and requested not in ids:
+            raise HTTPException(400, f"unknown model: {requested}")
+        return requested
+
     @app.post("/api/gifs/{gif_id}/enrich")
-    def run_enrich(gif_id: int) -> JSONResponse:
+    def run_enrich(gif_id: int, payload: dict | None = None) -> JSONResponse:
         """Describe a GIF with Claude. Opt-in, per GIF, costs money."""
         gif = store.get(gif_id)
         if gif is None:
@@ -570,7 +728,7 @@ def create_app(
         ok, why = enrich.available()
         if not ok:
             raise HTTPException(503, why)
-        queue_enrich(gif)
+        queue_enrich(gif, resolve_model((payload or {}).get("model")))
         return JSONResponse({"ok": True, "queued": 1}, status_code=202)
 
     @app.post("/api/gifs/describe")
@@ -599,13 +757,24 @@ def create_app(
             # batch cheap instead of paying twice for the same answer.
             if not payload.get("redo"):
                 gifs = [g for g in gifs if not g.enriched_at]
+        chosen = resolve_model(payload.get("model"))
         for gif in gifs:
-            queue_enrich(gif)
+            queue_enrich(gif, chosen)
         asked = len(store.list_gifs()) if scope else len(payload.get("ids") or [])
         return JSONResponse(
             {"ok": True, "queued": len(gifs), "skipped": max(0, asked - len(gifs))},
             status_code=202,
         )
+
+    @app.get("/api/models")
+    def list_models() -> JSONResponse:
+        """The model picker's options, live from the account, plus the default.
+
+        Writer-only (see WRITER_ONLY_PATHS): it makes an outbound API call, and
+        only a writer describes, so a guest never needs it."""
+        from gifhole import enrich
+
+        return JSONResponse({"models": enrich.list_models(), "default": enrich.default_model()})
 
     # -- jobs ----------------------------------------------------------------
 
@@ -630,10 +799,20 @@ def create_app(
         from gifhole import enrich
 
         enrich_ok, enrich_why = enrich.available()
+        # Kick a background refresh if the library changed since the last scan,
+        # so the possible-dupes prompt stays current without a manual check.
+        ensure_dupe_scan()
         return JSONResponse(
             {
-                "jobs": [j.as_dict() for j in jobs.list_jobs()[:20]],
+                # pollJobs() reads these for the queued count (the console's
+                # stop control), the active count, and to spot a landing that
+                # should reload the grid. A slice of recent history rather than
+                # only the active few, so a just-finished job is still seen.
+                "jobs": [j.as_dict() for j in jobs.list_jobs()[:40]],
                 "active": jobs.active(),
+                # Possible-duplicate groups, for the ambient prompt by the
+                # Library button. None until the first background scan finishes.
+                "duplicates": store._dup_count,
                 "capabilities": {
                     "ocr": ocr.available(),
                     "ocr_engine": ocr.backend(),
@@ -646,6 +825,17 @@ def create_app(
                 },
             }
         )
+
+    @app.get("/api/log")
+    def read_log(request: Request, since: int = 0) -> JSONResponse:
+        """The console's feed: sub-step messages newer than a cursor.
+
+        Reveals nothing /api/jobs does not (filenames and what the server is
+        doing), so it is classified public-read alongside it. A cursor of 0
+        back-fills whatever is still buffered.
+        """
+        events, cursor = bus.since(since)
+        return JSONResponse({"events": events, "cursor": cursor})
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app

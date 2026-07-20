@@ -170,6 +170,19 @@ def main() -> None:
 
     url = f"http://{args.host}:{port}/"
     print(f"gifhole  library: {args.root / 'gifs'}\n        serving: {url}", flush=True)
+
+    # Announce the optional capabilities at launch. Both are invisible when
+    # missing: a describe button that is merely disabled, an OCR that silently
+    # does not run. Printing them here turns "why is nothing happening" into a
+    # line you already read. Imported locally so a plain serve never pays for
+    # the anthropic import.
+    from gifhole import enrich, ocr
+
+    engine = ocr.backend()
+    enrich_ok, enrich_why = enrich.available()
+    print(f"        reading: {engine or 'off (no macOS Vision or tesseract)'}", flush=True)
+    print(f"         enrich: {'ready' if enrich_ok else f'off ({enrich_why})'}", flush=True)
+
     if not args.no_open:
         threading.Timer(0.8, webbrowser.open, (url,)).start()
 

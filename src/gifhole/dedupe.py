@@ -72,44 +72,51 @@ def dhash_image(image: Image.Image, size: int = HASH_SIZE) -> int | None:
     return bits
 
 
-def _frame_order(count: int) -> list[int]:
-    """Frames to try, best guess first, deduped and in range.
+# How many frames to sample across an animation. One frame was not enough: two
+# encodes of the same GIF at different lengths (measured: 54 frames vs 29) put
+# "a third of the way in" at different moments, so a single representative frame
+# compared the wrong pictures and scored 22 (a miss) when the closest aligned
+# pair scored 9. Ten frames each, matched on the closest pair, catches it. More
+# frames also means a GIF that opens on a title card still gets live frames.
+HASH_FRAMES = 10
 
-    Capped at a handful: this runs once per GIF on add and across the whole
-    library on backfill, and a GIF that is flat in four places is flat.
-    """
-    wanted = [count // 3, count // 2, 0, count - 1]
-    seen: list[int] = []
-    for index in wanted:
-        index = max(0, min(index, count - 1))
-        if index not in seen:
-            seen.append(index)
-    return seen
+
+def _sample_positions(count: int, k: int) -> list[int]:
+    """`k` frame indices spread evenly from first to last, deduped and in range."""
+    if count <= 1:
+        return [0]
+    k = min(k, count)
+    return sorted({min(round(i * (count - 1) / (k - 1)), count - 1) for i in range(k)})
 
 
 def perceptual_hash(path: Path) -> str:
-    """dhash of one representative frame, as hex. Empty string if unreadable.
+    """Space-joined dhashes of several frames sampled across the animation.
 
-    One frame, never a comparison across frames: two GIFs of the same scene cut
-    at different lengths should still match, and animation-aware comparison
-    would cost far more for a worse answer.
-
-    Which frame is the only subtlety. Frame 0 is a poor default because plenty
-    of GIFs open on a fade, a title card, or black, and those all hash alike.
-    So this tries a third of the way in first and walks to other positions if
-    that frame turns out to be flat, rather than giving up and leaving the GIF
-    with no perceptual hash at all.
+    Multiple frames, matched on the closest pair (see distance), because two
+    encodes of the same GIF cut to different lengths only line up at some
+    moments, and a single-frame hash kept comparing moments that did not line
+    up. Flat frames (title cards, fades) fall out via MIN_CONTRAST, so a GIF
+    that opens on black still gets hashes from its live frames. Empty string
+    when nothing hashable was found.
     """
     try:
         with Image.open(path) as img:
             count = getattr(img, "n_frames", 1)
-            positions = [0] if count == 1 else _frame_order(count)
-            for index in positions:
-                img.seek(index)
-                bits = dhash_image(img.convert("RGB"))
+            hashes = []
+            for index in _sample_positions(count, HASH_FRAMES):
+                # Per frame, not per file: some GIFs have one unreadable frame
+                # (a truncated or malformed block), and losing that frame must
+                # not throw away the nine good ones. A single-frame hash used to
+                # return before reaching a bad frame; sampling several means we
+                # have to step over it.
+                try:
+                    img.seek(index)
+                    bits = dhash_image(img.convert("RGB"))
+                except (OSError, ValueError, EOFError):
+                    continue
                 if bits is not None:
-                    return f"{bits:016x}"
-            return ""
+                    hashes.append(f"{bits:016x}")
+            return " ".join(hashes)
     except (OSError, ValueError, EOFError) as exc:
         # Never fatal: a GIF that cannot be hashed is simply never deduped.
         log.debug("could not hash %s: %s", path, exc)
@@ -117,10 +124,41 @@ def perceptual_hash(path: Path) -> str:
 
 
 def distance(a: str, b: str) -> int:
-    """Hamming distance between two hex dhashes; 64 (max) if either is missing."""
-    if not a or not b or len(a) != len(b):
+    """Smallest Hamming distance between any frame of `a` and any frame of `b`;
+    64 (max) if either has no hash. Min-over-frames is what lets two encodes
+    that align only at some moments still register as the same picture. Old
+    single-frame hashes (one value, no space) still work, they just compare
+    that one frame until re-hashed."""
+    ha, hb = a.split(), b.split()
+    if not ha or not hb:
         return 64
-    return bin(int(a, 16) ^ int(b, 16)).count("1")
+    best = 64
+    for x in ha:
+        xv = int(x, 16)
+        for y in hb:
+            bits = bin(xv ^ int(y, 16)).count("1")
+            if bits < best:
+                best = bits
+                if best == 0:
+                    return 0
+    return best
+
+
+def frame_ints(phash: str) -> list[int]:
+    """Parse a stored space-joined phash into int frame hashes, once, so a
+    library-wide scan doesn't re-parse hex on every comparison."""
+    return [int(h, 16) for h in phash.split()]
+
+
+def frames_near(a: list[int], b: list[int], threshold: int = NEAR_DISTANCE) -> bool:
+    """Whether any frame of `a` is within `threshold` of any frame of `b`, both
+    pre-parsed via frame_ints. Stops at the first near pair instead of finding
+    the minimum: the O(n^2) group scan only needs the yes/no."""
+    for x in a:
+        for y in b:
+            if (x ^ y).bit_count() <= threshold:
+                return True
+    return False
 
 
 def is_near(a: str, b: str, threshold: int = NEAR_DISTANCE) -> bool:

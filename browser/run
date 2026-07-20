@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Run the browser tests across chromium, firefox and webkit, in Docker.
+#
+# Two containers, on purpose. gifhole requires Python 3.13 and the Playwright
+# image ships 3.12, so rather than loosen the project to suit its own test
+# harness, the app runs in its own image (the same Linux one users get) and the
+# browser container holds only engines. The upside is that this exercises the
+# real Linux server rather than a Mac one.
+#
+# The image is the reason to use Docker at all: it carries chromium, firefox
+# and webkit with their system libraries, and WebKit's dependencies are the
+# part that never installs cleanly on a developer machine.
+#
+#   browser/run                    # all three engines
+#   browser/run --browser firefox  # one of them
+#
+# Arguments are passed through to pytest.
+set -euo pipefail
+
+IMAGE=mcr.microsoft.com/playwright/python:v1.49.0-noble
+repo=$(cd "$(dirname "$0")/.." && pwd)
+net=gifhole-browser-$$
+app=gifhole-app-$$
+
+cleanup() {
+  docker rm -f "$app" >/dev/null 2>&1 || true
+  docker network rm "$net" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+echo "building the gifhole image..."
+docker build -q -t gifhole:browsertest "$repo" >/dev/null
+
+docker network create "$net" >/dev/null
+docker run -d --rm --name "$app" --network "$net" \
+  -e GIFHOLE_ROOT=/library gifhole:browsertest >/dev/null
+
+# One GIF, so the grid has something to render. Built with the container's own
+# Pillow rather than shipped as a fixture: a hand-built GIF passes the
+# magic-byte check and then fails to decode, which has cost time here before.
+docker exec "$app" uv run python -c '
+from PIL import Image, ImageDraw
+import pathlib
+pathlib.Path("/library/gifs").mkdir(parents=True, exist_ok=True)
+fr = []
+for i in range(6):
+    f = Image.new("RGB", (64, 48), (20, 20, 30))
+    ImageDraw.Draw(f).rectangle([i*10, 0, i*10+10, 48], fill=(230, 140, 40))
+    fr.append(f)
+fr[0].save("/library/gifs/demo.gif", save_all=True, append_images=fr[1:], duration=80)
+'
+
+exec docker run --rm -i --network "$net" \
+  -v "$repo/browser":/browser:ro \
+  -e GIFHOLE_URL="http://$app:8777" \
+  -w /w \
+  "$IMAGE" \
+  bash -c '
+    set -e
+    mkdir -p /w && cp -a /browser /w/browser
+    # Pinned to the engines baked into the image: unpinned, pip pulls a newer
+    # playwright than the browsers on disk and then backtracks forever.
+    pip install -q pytest "playwright==1.49.0" "pytest-playwright==0.5.2"
+    # All three unless the caller named one: pytest-playwright runs chromium
+    # alone by default, which would quietly make this a single-engine suite
+    # while looking like a cross-browser one.
+    if [ $# -eq 0 ]; then
+      set -- --browser chromium --browser firefox --browser webkit
+    fi
+    exec pytest browser -q "$@"
+  ' bash "$@"

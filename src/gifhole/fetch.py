@@ -424,12 +424,21 @@ def import_urls(
     urls: list[str],
     staging_dir: Path,
     titles: dict[str, str] | None = None,
+    on_progress=None,
 ) -> FetchReport:
-    """Download and add exactly the URLs given, reusing anything already staged."""
+    """Download and add exactly the URLs given, reusing anything already staged.
+
+    `on_progress(finished, total, label)` is called after each URL, whether it
+    was added or skipped. Importing a thread is the longest thing gifhole does
+    and it used to report nothing until the whole batch landed, so the queue
+    showed one row sitting at zero for minutes with no way to tell a slow
+    download from a wedged one.
+    """
     report = FetchReport()
     titles = titles or {}
     with _client() as client:
-        for url in urls:
+        for index, url in enumerate(urls, 1):
+            label = ""
             try:
                 ensure_public_http_url(url)
                 data = fetch_bytes_cached(url, staging_dir, client)
@@ -438,8 +447,15 @@ def import_urls(
                     data = video_to_gif(data, suffix)
                 gif = store.add_bytes(_filename_for(url, titles.get(url, "")), data, source_url=url)
                 report.added.append(gif.filename)
+                label = gif.filename
             except (FetchError, ValueError) as exc:
                 report.skipped.append((url, str(exc)))
+            if on_progress is not None:
+                # Never let a reporting failure lose an import that worked.
+                try:
+                    on_progress(index, len(urls), label)
+                except Exception:  # noqa: BLE001
+                    log.debug("progress callback failed", exc_info=True)
     return report
 
 

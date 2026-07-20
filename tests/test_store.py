@@ -341,3 +341,23 @@ def test_filter_words_can_be_combined(store):
     store.update(tagged.id, description="described")
     found = [g.filename for g in store.list_gifs("untagged undescribed")]
     assert found == ["nothing.gif"]
+
+
+def test_duplicate_count_caches_and_invalidates(store):
+    """The ambient 'possible dupes' prompt: a cached group count that goes
+    stale on any change and is recomputed from stored hashes (no file IO)."""
+    a = store.add_bytes("a.gif", make_textured_gif(3, 64, 48), source_url="x")
+    # A resized re-encode of the same content: a near-duplicate group.
+    store._index(store.gifs_dir / "a.gif")  # ensure hashed
+    b_path = store.gifs_dir / "b.gif"
+    b_path.write_bytes(make_textured_gif(3, 32, 24))
+    store._index(b_path)
+
+    # Signature-keyed cache: stale exactly when the data changed, no flags.
+    before = store.library_signature()
+    assert store.recompute_duplicate_count() == 1  # one possible-dup group
+    assert store._dup_count == 1 and store._dup_signature == before
+
+    # Removing one member changes the library, so the signature must move.
+    store.remove(a.id)
+    assert store.library_signature() != before

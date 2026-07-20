@@ -268,6 +268,45 @@ def test_import_urls_reports_failures_without_aborting(store, tmp_path):
     assert [u for u, _ in report.skipped] == [bad]
 
 
+def test_import_reports_progress_after_each_url(store, tmp_path):
+    """The rail's live count depends on this: a batch that reported only at the
+    end left one row sitting at zero for the whole import, which reads as a
+    stall. One call per URL, added or skipped, with a running index."""
+    from tests.conftest import make_gif
+
+    good = "https://example.com/good.gif"
+    fetch.stage_path(tmp_path, good).parent.mkdir(parents=True, exist_ok=True)
+    fetch.stage_path(tmp_path, good).write_bytes(make_gif())
+    bad = "https://example.com/not-a.gif"
+    fetch.stage_path(tmp_path, bad).write_bytes(b"<html>nope</html>")
+
+    seen = []
+    fetch.import_urls(
+        store, [good, bad], tmp_path, on_progress=lambda i, n, label: seen.append((i, n, label))
+    )
+
+    # Called for both, in order, counting up to the total.
+    assert [(i, n) for i, n, _ in seen] == [(1, 2), (2, 2)]
+    assert seen[0][2] == "good.gif", "the added file names its progress row"
+    assert seen[1][2] == "", "a skipped URL reports no filename"
+
+
+def test_a_failing_progress_callback_never_loses_the_import(store, tmp_path):
+    """The rail is a nicety; the import is not. A callback that throws must not
+    take the download with it."""
+    from tests.conftest import make_gif
+
+    url = "https://example.com/good.gif"
+    fetch.stage_path(tmp_path, url).parent.mkdir(parents=True, exist_ok=True)
+    fetch.stage_path(tmp_path, url).write_bytes(make_gif())
+
+    def boom(*_):
+        raise RuntimeError("rail blew up")
+
+    report = fetch.import_urls(store, [url], tmp_path, on_progress=boom)
+    assert report.added == ["good.gif"]
+
+
 def test_data_url_attribute_is_scraped():
     """old.reddit hangs post media off data-url rather than an <a> or <img>."""
     html = '<html><body><div data-url="https://i.redd.it/viadata.gif"></div></body></html>'

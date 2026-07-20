@@ -17,9 +17,13 @@ services:
       - ./library:/library
     environment:
       GIFHOLE_ROOT: /library
-      # Uncomment to enable Claude descriptions.
-      # ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      # Set this before changing the port binding below to anything other than
-      # 127.0.0.1. Without it, whoever can reach the port can clear the library.
-      # GIFHOLE_TOKEN: ${GIFHOLE_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Passed through, not commented out: the README tells you to expose this
+      # with `GIFHOLE_TOKEN=... docker compose up -d`, and a commented variable
+      # made that command serve an unauthenticated library while looking
+      # protected. Empty means no token, which is correct for the loopback
+      # binding above. Set it before binding anywhere else.
+      GIFHOLE_TOKEN: ${GIFHOLE_TOKEN:-}
+      GIFHOLE_READ_TOKEN: ${GIFHOLE_READ_TOKEN:-}
+      GIFHOLE_PUBLIC_READS: ${GIFHOLE_PUBLIC_READS:-}
     restart: unless-stopped

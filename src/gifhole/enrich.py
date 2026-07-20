@@ -10,13 +10,55 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from gifhole.frames import sample_frames, to_png_bytes
 
 log = logging.getLogger(__name__)
 
-MODEL = "claude-opus-4-8"
+# Describing a reaction GIF is a light vision task (a sentence, tags from a
+# fixed vocabulary, a meme name), so the default is Sonnet rather than Opus:
+# much cheaper and faster, still strong on the one part that rewards a bigger
+# model, recognising which meme it is. Overridable per instance by
+# GIFHOLE_ENRICH_MODEL, and per describe by the picker in the library panel.
+# There is no lock-in to worry about while nothing here is an embedding.
+DEFAULT_MODEL = "claude-sonnet-5"
+
+
+def default_model() -> str:
+    return os.environ.get("GIFHOLE_ENRICH_MODEL") or DEFAULT_MODEL
+
+
+_models_cache: list[dict] | None = None
+
+
+def list_models() -> list[dict]:
+    """The account's available models, as [{"id", "name"}], for the picker.
+
+    Empty when enrichment cannot run (no key, no package), so the UI simply
+    offers no choice. Cached for the process: the list barely changes and the
+    call, though free, is a network round trip.
+    """
+    global _models_cache
+    if _models_cache is not None:
+        return _models_cache
+    ok, _ = available()
+    if not ok:
+        return []
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic()
+        _models_cache = [
+            {"id": m.id, "name": getattr(m, "display_name", None) or m.id}
+            for m in client.models.list(limit=100)
+        ]
+    except Exception as exc:  # noqa: BLE001 - a listing failure just means no picker
+        log.debug("could not list models: %s", exc)
+        return []
+    return _models_cache
+
 
 # Tagging a library automatically is only useful if the vocabulary stays small.
 # Left unconstrained a model invents a fresh near-synonym per GIF ("laughing",
@@ -128,13 +170,20 @@ def available() -> tuple[bool, str]:
     return True, ""
 
 
-def describe_gif(path: Path, frames: int = 3, vocabulary: list[str] | None = None) -> dict:
+def describe_gif(
+    path: Path,
+    frames: int = 3,
+    vocabulary: list[str] | None = None,
+    model: str | None = None,
+) -> dict:
     """Ask Claude what a GIF shows. Returns {description, meme_name, tags}.
 
     `vocabulary` is the library's existing tags, most-used first. Passing it
     keeps the tagging consistent instead of inventing a synonym per GIF.
+    `model` overrides the default for this one call (the picker's choice).
     """
     vocabulary = vocabulary or []
+    model = model or default_model()
     ok, why = available()
     if not ok:
         raise EnrichError(why)
@@ -163,7 +212,7 @@ def describe_gif(path: Path, frames: int = 3, vocabulary: list[str] | None = Non
     try:
         client = anthropic.Anthropic()
         response = client.messages.create(
-            model=MODEL,
+            model=model,
             max_tokens=1024,
             thinking={"type": "adaptive"},
             output_config={"format": {"type": "json_schema", "schema": build_schema(vocabulary)}},

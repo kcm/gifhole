@@ -63,6 +63,7 @@
     <button id="add" class="primary">Add GIFs</button>
     <button id="grab" title="download from a GIF link or scrape a page">Grab URL</button>
     <button id="librarybtn" title="describe, rescan, duplicates, trash">Library</button>
+    <button id="dupealert" class="dupealert" title="review possible duplicates" hidden></button>
     <!-- Kept in the markup, out of the toolbar: the library panel drives these,
          and the keyboard shortcuts still click them. -->
     <button id="rescan" class="visually-hidden">Rescan</button>
@@ -72,13 +73,11 @@
          file picker for a display:none input. -->
     <input id="file" type="file" accept="image/gif" multiple class="visually-hidden">
   </div>
-  <div id="tags" class="tags"></div>
   <p class="hint">
     <span class="hinttext">click copies the image &middot; shift-click copies the URL
       &middot; alt-click copies the file path</span>
     &middot; <button id="helpbtn" class="linkish">keyboard shortcuts</button>
   </p>
-  <div id="jobs" class="jobs" hidden></div>
   <hr>
 </header>
 
@@ -134,6 +133,10 @@
         <button id="libdescribe" class="primary">Describe</button>
         <span id="libscopecount" class="libcount"></span>
       </div>
+      <div class="librow">
+        <label class="libfieldlabel" for="libmodel">model</label>
+        <select id="libmodel" title="which model describes; cheaper is usually fine"></select>
+      </div>
     </div>
 
     <div class="libsection">
@@ -153,8 +156,26 @@
       <p class="libnote">Local only. None of these cost anything or call out.</p>
       <div class="librow">
         <button id="librescan">Rescan folder</button>
+        <button id="libreocr" title="re-read burned-in text for every GIF, picking up OCR improvements">Re-read text</button>
         <button id="libdupes">Find duplicates</button>
         <button id="libtrash">Open trash</button>
+      </div>
+    </div>
+
+    <div class="libsection">
+      <h3>Appearance</h3>
+      <p class="libnote">Retro skins, each an homage to a dot-com-era site.</p>
+      <div class="librow">
+        <label class="libfieldlabel" for="theme">skin</label>
+        <select id="theme" title="skin">
+          <option value="memepool">memepool</option>
+          <option value="fark">fark</option>
+          <option value="zombo">zombo</option>
+          <option value="webvan">webvan</option>
+          <option value="petsdotcom">pets.com</option>
+          <option value="altavista">altavista</option>
+          <option value="linkedin">linkedin</option>
+        </select>
       </div>
     </div>
 
@@ -167,6 +188,11 @@
         <button id="libclear" class="danger">Clear the library</button>
       </div>
     </div>
+
+    <!-- The real clear button the Danger control and the keyboard both click.
+         Hidden, not in the toolbar: library-wide actions delegate to one
+         canonical button so the confirm and disabled state never drift. -->
+    <button id="clearall" class="visually-hidden">clear the library</button>
   </div>
 </div>
 
@@ -259,20 +285,20 @@
 <div id="drop" class="drop" hidden><span>drop GIFs to add</span></div>
 <div id="toast" class="toast" hidden></div>
 
-<footer>
-  <span class="skinlabel">skin</span>
-  <select id="theme" title="skin">
-    <option value="memepool">memepool</option>
-    <option value="fark">fark</option>
-    <option value="zombo">zombo</option>
-    <option value="webvan">webvan</option>
-    <option value="petsdotcom">pets.com</option>
-    <option value="altavista">altavista</option>
-    <option value="linkedin">linkedin</option>
-  </select>
-  <span class="footspacer"></span>
-  <button id="clearall" class="visually-hidden">clear the library</button>
-</footer>
+<!-- The process console. Hidden until ` / ~ is pressed, a la a GUI editor's
+     terminal. Static structure only; lines are appended as textContent. -->
+<section id="console" class="console" hidden aria-label="process log">
+  <div class="console-bar">
+    <span class="console-title">console</span>
+    <span class="console-hint">~ to toggle</span>
+    <span class="console-spacer"></span>
+    <span id="consolequeue" class="console-queue" hidden></span>
+    <button id="consolestop" class="linkish" hidden>stop queued</button>
+    <button id="consoleclear" class="linkish">clear</button>
+    <button id="consoleclose" class="linkish">close</button>
+  </div>
+  <div id="consolelog" class="console-log" role="log" aria-live="polite"></div>
+</section>
 
 <script src="/static/app.js"></script>
 </body>

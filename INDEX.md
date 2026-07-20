@@ -13,6 +13,7 @@
 | [src/gifhole/frames.py](src/gifhole/frames.py) | Sampling still frames out of a GIF |
 | [src/gifhole/ocr.py](src/gifhole/ocr.py) | Burned-in text via macOS Vision |
 | [src/gifhole/enrich.py](src/gifhole/enrich.py) | Claude descriptions + meme ID (opt-in) |
+| [src/gifhole/logbus.py](src/gifhole/logbus.py) | In-memory process feed for the ` / ~ console |
 | [src/gifhole/fetch.py](src/gifhole/fetch.py) | Download from a link or scrape a page |
 | [src/gifhole/static/index.html](src/gifhole/static/index.html) | UI markup |
 | [src/gifhole/static/style.css](src/gifhole/static/style.css) | Styles |
@@ -22,5 +23,9 @@
 | [tests/test_api.py](tests/test_api.py) | HTTP API end to end |
 | [tests/test_metadata.py](tests/test_metadata.py) | Frames, jobs, OCR-fed search, migration |
 | [tests/test_fetch.py](tests/test_fetch.py) | URL safety, scraping, dedup, naming |
+| [tests/test_logbus.py](tests/test_logbus.py) | Console feed: cursor tail, ring buffer |
+| [browser/run](browser/run) | Cross-engine UI tests in Docker (chromium, firefox, webkit) |
+| [browser/conftest.py](browser/conftest.py) | Server fixture + console-error collection |
+| [browser/test_browsers.py](browser/test_browsers.py) | The UI failures that have actually shipped |
 | [.claude/launch.json](.claude/launch.json) | Dev server config for the preview pane |
 | [packaging/homebrew/gifhole.rb](packaging/homebrew/gifhole.rb) | Homebrew formula with `brew services` support |

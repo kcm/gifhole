@@ -41,6 +41,10 @@ class OcrResult:
     text: str
     available: bool
     reason: str = ""
+    # What the engine read before the scoreboard/HUD filter, joined. Kept so the
+    # console can show the cleanup (raw -> kept), which is the useful line, not a
+    # count.
+    raw: str = ""
 
 
 def _load_vision():
@@ -52,6 +56,17 @@ def _load_vision():
         log.debug("Vision unavailable: %s", exc)
         return None
     return Vision, Quartz
+
+
+class TesseractError(RuntimeError):
+    """Tesseract could not read the frame, as opposed to finding no text.
+
+    The distinction is the whole point. `read_gif_text` turns this into
+    available=False, which app.py records as a failed job, which leaves the GIF
+    eligible for a later Rescan. Returning an empty list instead would stamp
+    ocr_at and exclude it from retry forever while reporting success, which is
+    the bug the Vision path was fixed for and this path reintroduced.
+    """
 
 
 def _tesseract() -> str | None:
@@ -79,8 +94,8 @@ def _recognize_tesseract(png_bytes: bytes) -> list[str]:
     every GIF's searchable text.
     """
     binary = _tesseract()
-    if binary is None:
-        return []
+    if binary is None:  # pragma: no cover - guarded by the caller
+        raise TesseractError("tesseract disappeared between the check and the call")
     try:
         proc = subprocess.run(
             [binary, "stdin", "stdout", "--psm", TESSERACT_PSM, "tsv"],
@@ -90,21 +105,21 @@ def _recognize_tesseract(png_bytes: bytes) -> list[str]:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        log.warning("tesseract failed: %s", exc)
-        return []
+        raise TesseractError(f"tesseract could not run: {exc}") from exc
     if proc.returncode != 0:
-        log.warning("tesseract exited %s: %s", proc.returncode, proc.stderr[:200])
-        return []
+        detail = proc.stderr.decode("utf-8", "replace").strip()[:200]
+        raise TesseractError(f"tesseract exited {proc.returncode}: {detail}")
 
     rows = proc.stdout.decode("utf-8", "replace").splitlines()
     if not rows:
+        # Genuinely nothing on the page is a valid answer, unlike the above.
         return []
     header = rows[0].split("\t")
     try:
         conf_at, text_at = header.index("conf"), header.index("text")
         line_key = [header.index(c) for c in ("block_num", "par_num", "line_num")]
-    except ValueError:
-        return []
+    except ValueError as exc:
+        raise TesseractError("tesseract TSV had no conf/text columns") from exc
 
     # Words come back one per row; regroup them into the lines they came from.
     lines: dict[tuple, list[str]] = {}
@@ -162,12 +177,81 @@ def _recognize(png_bytes: bytes) -> list[str]:
     return lines
 
 
+# Includes y, so all-caps interjections with no true vowel ("WHY", "GYM")
+# still read as words rather than as consonant fragments.
+_VOWELS = frozenset("aeiouyAEIOUY")
+_TIMER = re.compile(r"\d{1,3}:\d{2}")
+# Punctuation to strip from an OCR token before judging it. The en/em dashes
+# are written as escapes, not literals, so they read as data here (characters
+# to remove) and do not trip the no-dash pre-commit hook.
+_STRIP = ".,:;!?-'\"()[]{}\u2013\u2014\u2026"
+
+
+def _strong_word(token: str) -> bool:
+    """A token long enough to be a word rather than a scoreboard abbreviation.
+
+    Four letters with a vowel is the anchor: "VAMOS", "OVER", "LEVEL". A real
+    3-letter caption ("NO", "WHY", "RUN") is indistinguishable from a team code
+    ("DOR", "RMA") in isolation, so length is what carries here, not a
+    dictionary.
+    """
+    letters = re.sub(r"[^A-Za-z]", "", token)
+    return len(letters) >= 4 and any(c in _VOWELS for c in letters)
+
+
+def _noise_token(token: str) -> bool:
+    """The stuff burned-in HUDs are made of: a clock, a bare number, or a lone
+    character. Their presence in a line with no real word marks it as
+    scoreboard rather than caption."""
+    if _TIMER.fullmatch(token):
+        return True
+    stripped = token.strip(_STRIP)
+    if not stripped:  # pure punctuation
+        return True
+    if stripped.isdigit():  # a bare score or number
+        return True
+    letters = re.sub(r"[^A-Za-z]", "", token)
+    return len(letters) <= 1  # a lone letter, or a digit glued to one ("0L")
+
+
+def _wordlike(token: str) -> bool:
+    """Two or more letters with a vowel: the weak test for a clean short line
+    that has no numbers or stray characters to give it away."""
+    letters = re.sub(r"[^A-Za-z]", "", token)
+    return len(letters) >= 2 and any(c in _VOWELS for c in letters)
+
+
+def _looks_like_caption(line: str) -> bool:
+    """Keep a line only if it reads as words, not as a clock or a scoreboard.
+
+    OCR reads burned-in timers, scores and channel bugs with high confidence,
+    so a confidence threshold never catches them; this does, lexically:
+
+    * a strong word anchors the line, so "OVER 9000" and "LEVEL 99" survive;
+    * failing that, any HUD noise token (a bare number, a clock, a lone
+      character) drops it, so "89 73:30 DOR 0 RMA ES" and "0 - 1" go;
+    * a clean short line with neither ("NO", "WHY") is kept on the weak test.
+
+    Deliberately lenient once anchored: the text only widens a search, so a
+    mangled caption is still worth keeping; a row of scoreboard tokens is not.
+    """
+    tokens = line.split()
+    if not tokens:
+        return False
+    if any(_strong_word(t) for t in tokens):
+        return True
+    if any(_noise_token(t) for t in tokens):
+        return False
+    return any(_wordlike(t) for t in tokens)
+
+
 def _tidy(lines: list[str]) -> str:
-    """Collapse near-duplicate lines across frames into one caption string."""
+    """Collapse near-duplicate lines across frames into one caption string,
+    dropping lines that read as scoreboard or timer noise rather than text."""
     seen: dict[str, str] = {}
     for line in lines:
         cleaned = re.sub(r"\s+", " ", line).strip()
-        if len(cleaned) < 2:
+        if len(cleaned) < 2 or not _looks_like_caption(cleaned):
             continue
         key = re.sub(r"[^a-z0-9]", "", cleaned.lower())
         if key and key not in seen:
@@ -189,7 +273,8 @@ def read_gif_text(path: Path, frames: int = 3) -> OcrResult:
         lines: list[str] = []
         for frame in sample_frames(path, frames):
             lines.extend(recognise(to_png_bytes(upscale_for_ocr(frame))))
-        return OcrResult(_tidy(lines), available=True)
+        raw = " ".join(line.strip() for line in lines if line.strip())
+        return OcrResult(_tidy(lines), available=True, raw=raw)
     except Exception as exc:  # a malformed GIF must not take the request down
         log.warning("OCR failed for %s: %s", path.name, exc)
         return OcrResult("", available=False, reason=str(exc))

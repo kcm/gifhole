@@ -40,9 +40,19 @@ stray request cannot empty it.
 ## Conventions
 
 - `uv run pytest` and `uv run ruff check .` must both be clean before finishing.
+- **`browser/run` too, for any change to `static/`.** The hermetic suite never
+  opens a browser, so it cannot see a panel that throws or a control that
+  quietly does nothing, which is how every frontend bug here has shipped.
+- **Iterating: the hermetic suite is ~2s, so just run it whole**; reach for
+  `pytest --lf` or `-k <name>` to narrow while fixing. The real cost is the
+  browser run (~40s, three engines), so during development run one engine
+  (`browser/run --browser chromium`) and all three before finishing. Per-diff
+  test selection (`pytest-testmon`) is not worth its coverage overhead at this
+  suite size; revisit only if the hermetic suite grows past a few seconds.
 - Frontend has no dependencies and no build. Keep it that way; plain DOM APIs.
 - **The UI has selectable dot-com-era skins**, chosen from a muted picker in the
-  footer (deliberately not a primary action) and persisted to `localStorage`
+  library panel's Appearance section (deliberately not a primary action) and
+  persisted to `localStorage`
   under `gifhole-theme`. Each is an homage:
   `memepool` (default: cream/serif/blue), `fark` (purple/green/Arial),
   `zombo` (black void, neon, animated rings), `webvan` (grocery green),
@@ -62,15 +72,16 @@ stray request cannot empty it.
   add a `WORDMARKS` entry, don't branch on the theme name.
 - **No flash of the wrong skin:** an inline `<head>` script sets
   `documentElement.dataset.theme` from `localStorage` before the stylesheet
-  paints. `applyTheme()` in app.js (runs on load and on change) syncs the footer
-  `<select>`, swaps the per-skin `.tagline` and masthead wordmark, and re-saves.
+  paints. `applyTheme()` in app.js (runs on load and on change) syncs the skin
+  `<select>` (in the library panel), swaps the per-skin `.tagline` and masthead
+  wordmark, and re-saves.
   Keep the head script tiny and dependency-free.
 - Never interpolate a filename, title, or tag into `innerHTML`. Static template
   markup only, values set via `textContent` / properties.
 - Uploads are validated by magic bytes (`GIF87a`/`GIF89a`), not by extension or
   content-type. Filenames are slugged through `safe_filename()`.
 - **The metadata/download layers must never become required.** OCR checks
-  `vision_available()`, enrich checks `enrich.available()`, video checks
+  `ocr.available()`, enrich checks `enrich.available()`, video checks
   `ffmpeg_available()`. Each returns cleanly when its dependency is missing,
   and a failed job is recorded, not raised. Don't add a hard import of
   `anthropic`, `Vision`, or `ffmpeg` at module top level in the request path.
@@ -115,6 +126,14 @@ stray request cannot empty it.
   and cannot be honoured, stop the process: `create_app` raises and the CLI
   exits before printing, opening a browser, or claiming a port. A warning about
   serving everything is not a substitute for not serving everything.
+- **CI runs the oldest supported Python, not the newest.** Development happens
+  on the current release, so the ceiling is exercised every day and the floor
+  is exercised by nobody; a matrix would mostly re-test what is already
+  covered. `requires-python`, ruff's `target-version` and the `uv sync
+  --python` pin in `check.yml` must all agree, which
+  `tests/test_contracts.py` enforces: raising the floor without moving CI
+  leaves it untested, and letting ruff target a newer version lets it rewrite
+  code into syntax the floor cannot parse.
 - **Every GET route must be classified** in `tests/test_contracts.py`, as safe
   to expose under `--public-reads` or as writer-only. `WRITER_ONLY_PATHS` is
   hand-maintained, so without that test a new expensive GET would default to
@@ -182,6 +201,53 @@ contributor's business, not something a shared repo should enforce.
 CI (`.github/workflows/check.yml`) runs lint, format, `node --check` on the
 frontend, the suite, and a boot with no optional dependencies present, which is
 what keeps the degradation rules honest on a machine without Vision or ffmpeg.
+
+**The UI is only tested where you run it.** `tests/` never opens a browser, so
+every frontend bug this project has shipped (a panel that threw and stayed
+hidden, an error body read as data, a fragment that threw on `null`) was
+invisible to a green suite. `browser/run` exercises the real UI in chromium,
+firefox and webkit against the Linux container:
+
+```
+browser/run                    # all three engines, in Docker
+browser/run --browser firefox  # one of them
+```
+
+**Run this before handing work over, not only before a release.** It is the
+gate that catches a UI regression while it is still cheap: on the machine
+where the change was made, in a Linux browser, before CI or a human sees it.
+Three engines, 24 seconds. The image carries webkit's system libraries, which
+are the part that never installs cleanly by hand, and that is the whole reason
+it is worth its size.
+
+CI is a backstop for this, not the primary check, which is why a full
+three-engine job there is hard to justify. On Linux, or in CI, the engines can
+be installed directly instead and the `server` fixture starts gifhole itself:
+
+```
+uv sync --group browser
+uv run --group browser playwright install --with-deps chromium
+uv run --group browser pytest browser
+```
+
+**`--group browser` is needed on `uv run`, not just on `uv sync`.** `uv run`
+re-syncs to the default groups first, which uninstalls playwright and then
+fails to spawn it, with an error that reads like a missing binary rather than
+a dropped dependency. Measured: chromium alone is 849 MB installed, all three
+engines 1.3 GB, against 2.4 GB for the image.
+
+Those tests assert `page.errors == []` as well as the visible outcome, because
+the shared symptom has always been an uncaught exception plus a control that
+silently declines to work. Add a case there when a UI bug is found, and prove
+it fails before you fix it: reintroducing the panel bug fails all three
+engines, which is the evidence that the check is real.
+
+Two limits worth stating rather than discovering. Playwright's webkit is not
+Safari, so it catches a missing API or a parse error and not Safari's own
+quirks. And a synthesized `DataTransfer` cannot test drag-and-drop from a real
+site: the Firefox/Giphy bug was about what Firefox actually puts in the
+transfer, so a test built on our own assumption about that payload would have
+agreed with the bug. Record real payloads as fixtures instead.
 
 **A green suite on macOS does not mean a green suite.** This box has Vision,
 ffmpeg and a pasteboard, so a test can pass here for a reason that does not
@@ -274,9 +340,11 @@ in one place, which is the property that makes the simple thing keep working.
   `tagEditor()` is built around that: the field is always open (no click to
   reveal), a commit leaves it focused for the next tag, and **nothing in the
   editor calls `load()`**. A reload per tag refetches the library and rebuilds
-  every card, throwing away scroll position and focus mid-file. Tag-bar counts
-  are instead adjusted locally by `bumpTag()`, which a later `load()`
-  reconciles against the server's authoritative numbers.
+  every card, throwing away scroll position and focus mid-file. `bumpTag()`
+  instead adjusts the local `state.tags` counts (used by the tag autocomplete),
+  which a later `load()` reconciles against the server's authoritative numbers.
+  The always-on tag cloud above the wall was removed; tag filtering is via the
+  card chips and search.
 - **Structured output rejects `maxItems`.** The API returns a 400
   ("For 'array' type, property 'maxItems' is not supported"), so tag counts are
   requested in the field descriptions and enforced in `merge_result()`. Only
@@ -296,10 +364,17 @@ in one place, which is the property that makes the simple thing keep working.
   high-frequency pattern aliases under downsampling, so test fixtures must use
   large smooth shapes (`make_textured_gif`) or a resized copy stops matching.
   `NEAR_DISTANCE` is measured, not guessed: see the comment for the numbers.
-  Hashing is single-frame by design, never a comparison across the animation,
-  so two cuts of the same scene still match. `_frame_order()` tries a third of
-  the way in first and falls back rather than giving up, because a GIF that
-  opens on black would otherwise get no hash at all.
+  Hashing is now multi-frame: `perceptual_hash()` stores `HASH_FRAMES` frame
+  dhashes sampled across the animation (space-joined), and `distance()` takes
+  the closest pair. Single-frame was wrong for a real case, two encodes of one
+  GIF at 54 vs 29 frames put "a third of the way in" on different moments and
+  scored a miss; the closest aligned pair scored 9. Flat frames still drop out
+  via `MIN_CONTRAST`. Old single-frame hashes still compare (one value, no
+  space); `backfill_hashes()` re-hashes them, and `/api/duplicates` calls it
+  first, so one "Find duplicates" run migrates a library built under the old
+  scheme. The min-over-frames raises false-positive odds, but duplicates are
+  reported, never dropped, so a false match costs one glance while a miss is
+  permanent.
 - **A duplicate is reported, never rejected.** `/api/gifs` answers 200 with
   `{duplicate, matches}` and writes nothing; only `force` adds. Keep that shape:
   only the user can tell a re-encode from a different cut of the same scene.
@@ -323,6 +398,56 @@ in one place, which is the property that makes the simple thing keep working.
   spacing stopped at `count/(count+1)` of the way through, so the final quarter
   was never seen and end-of-clip captions were invisible to OCR and to Claude.
   Punchlines land at the end.
+- **The describe model is configurable, defaulting to Sonnet, not Opus.**
+  `enrich.default_model()` reads `GIFHOLE_ENRICH_MODEL` or falls back to
+  `DEFAULT_MODEL` (Sonnet 5); `describe_gif(..., model=)` overrides per call.
+  The picker in the library panel is live-loaded from `enrich.list_models()`
+  (the Models API, cached per process) via `GET /api/models`, which is
+  writer-only because it makes an outbound call. The client sends its choice
+  with every describe request and `resolve_model()` validates it against the
+  live list, so a stale id fails fast rather than after the images upload. The
+  choice is stored in `localStorage` only when it differs from the server
+  default, so the default can move without a stale pin. Do not re-add a hard
+  `MODEL` constant; it was removed on purpose.
+- **Describe replaces the description but merges tags.** In `set_enrichment`
+  the description overwrites (a GIF has one, and a re-describe should fix a bad
+  earlier pass) while tags merge (a set you also curate by hand, so describe
+  adds and never removes, matching the bulk-tag rule). Either way the card
+  offers a one-step undo: `describeUndo` (module-level, keyed by id) snapshots
+  the pre-describe description and tags on click, and after the job lands and
+  the grid reloads a render shows the `.undo` button only when the snapshot
+  differs from what is on screen. The snapshot is cleared on a manual tag or
+  description edit, since that supersedes the describe.
+- **OCR text has per-entry controls, and is still not free-typed.** Clicking the
+  `.quote` opens a re-run / delete menu (`POST` / `DELETE /api/gifs/{id}/ocr`).
+  Re-run goes through `submit_ocr` and overwrites; delete calls `set_ocr(id, "")`,
+  which clears the text but stamps `ocr_at`, so a plain Rescan will not
+  re-populate the noise you removed (a deliberate re-run or the library re-read
+  still will). The quote stays read-only text, not a `contenteditable`: OCR is a
+  fact about the picture, so the menu regenerates or removes it rather than
+  letting you type over it. The empty state shows a faint "read text" affordance
+  so a deleted GIF can still be re-read, gated on `capabilities.ocr` and hidden
+  for read-only guests.
+- **Describe and re-read are different tools; keep them apart.** "Describe" is
+  Claude enrichment (description + tags), costs money, and never touches OCR.
+  Re-reading burned-in text is free and local, so applying an OCR improvement
+  to an existing library is the "Re-read text" maintenance action
+  (`/api/gifs/reocr`), not describe. `submit_ocr()` queues a read regardless of
+  `auto_ocr` (that flag gates only the automatic on-add read via `queue_ocr`);
+  the explicit per-GIF and batch endpoints go through `submit_ocr` so they work
+  even when auto-OCR is off. `set_ocr` overwrites and re-stamps, so a re-read
+  replaces the old text rather than appending.
+- **OCR text is filtered before it is stored, not trusted whole.** Vision reads
+  a burned-in scoreboard, match clock or channel bug with high confidence, so
+  the confidence threshold does nothing for them; `_looks_like_caption()` in
+  `ocr.py` drops those lines lexically. The rule: a strong word (>=4 letters
+  with a vowel) anchors a line and keeps it even with numbers ("OVER 9000");
+  otherwise a HUD noise token (a bare number, a clock like `73:31`, a lone
+  character) drops it. A 3-letter caption is indistinguishable from a team code
+  in isolation, so length carries this, not a dictionary. It is deliberately
+  lenient once anchored: the text only widens a search, so a mangled caption is
+  worth keeping and only structured HUD noise is dropped. The failing case is
+  recorded in `test_metadata.py` with the exact Vision output that prompted it.
 - **Vision is preferred over Tesseract for a real reason.** Meme text is warped
   and stylised over busy pictures, near the worst case for classical OCR.
   FindThatMeme ran a rack of second-hand iPhones at 17M memes rather than use
@@ -396,6 +521,33 @@ in one place, which is the property that makes the simple thing keep working.
   not reliable enough to be the only path: the element can lose focus without
   the handler running and the edit disappears with no sign it was dropped.
   This has now bitten twice in this codebase.
+- **The console is fed by `logbus`, not by job status.** Sub-steps like
+  "asking the model" or "tagged X" never reach a `Job` field, so `emit()` calls
+  in the job closures in `app.py` are where they come from; `logbus.py` is a
+  bounded ring buffer read by cursor at `/api/log?since=`. Keep emit calls at
+  the orchestration layer (the closures), not buried in `enrich`/`ocr`/`fetch`,
+  so those modules stay dependency-free and the bus stays optional. A missing
+  emit is a quiet console, never an error, which is the point: the log is a
+  nicety and must never be able to break the work it reports on.
+  Every path a GIF can enter by must `emit`, or that import looks like it did
+  nothing: the `/api/gifs` upload (drop, paste, file picker) and its
+  duplicate branch both emit, not just the picker import and the OCR that
+  follows. A silent duplicate drop is exactly what read as broken.
+- **`` ` `` / `~` is guest-allowed and in `READ_ONLY_KEYS`.** The console only
+  reads the log, so a read-token guest may open it. It obeys the same typing
+  guard as every other bare-key shortcut: a backtick typed into a field is a
+  character, not a toggle.
+- **The console is the only process view; there is no always-on strip.** An
+  earlier job rail was removed as a duplicate of the console. `pollJobs()`
+  stays and is load-bearing for reasons unrelated to any rail: it loads
+  `capabilities` (which gates the first render via `capsLoaded`), applies
+  read-only, and reloads the grid when an import or describe lands. Don't
+  delete it thinking it only fed the rail.
+- **A queued batch is stopped from the console.** With the rail gone, the
+  cancel control (`#consolestop`) lives in the console bar and appears when
+  `pollJobs()` sees queued jobs. A describe-all is real money, so this path
+  must stay reachable: the launch toast points at `~` for exactly that reason.
+  The running job is never killed, only the queue behind it.
 - **The job kinds in `pollJobs()` must match what `app.py` submits.** They are
   matched by string, so renaming a job kind silently stops the grid refreshing
   when that job lands: renaming `enrich` to `describe` left finished
