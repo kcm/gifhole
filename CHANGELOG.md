@@ -20,16 +20,14 @@ losing anything. Anything that would break that is a major change.
 
 ## [Unreleased]
 
-### Changed
-
-- The Python floor is 3.11, down from 3.13. Nothing in gifhole needed 3.13,
-  and requiring it meant that Debian 12 and Ubuntu 22.04 users had to install
-  a second Python before they could install gifhole at all. Resolved
-  dependency versions are unchanged. CI now runs the floor rather than the
-  newest release, since development already exercises the newest every day.
+## [0.2.0] · 2026-07-21
 
 ### Added
 
+- A stats block at the top of the Library panel: never-pasted count, the filing
+  debt (untagged, undescribed, untitled), and the heaviest tags. Every number is
+  a link that closes the panel and filters the wall to exactly those GIFs. A new
+  `unused` search word (copies == 0) backs the never-pasted count.
 - A process console, toggled with ` or ~ like a GUI editor's terminal. Hidden
   by default and remembered per browser, it is the detailed view the ambient
   rail is not: timestamped sub-steps as they happen ("reading text: cat.gif",
@@ -45,9 +43,6 @@ losing anything. Anything that would break that is a major change.
   author's Mac browser. They assert that the console stays silent, because
   every UI bug this project has shipped surfaced first as an uncaught
   exception and a control that quietly did nothing.
-
-### Added
-
 - Startup prints the optional capabilities (`reading:` for OCR, `enrich:` for
   Claude describe), so a launch says `enrich: ready` or `enrich: off (no API
   key...)` up front. Both were previously invisible when missing: a disabled
@@ -70,6 +65,11 @@ losing anything. Anything that would break that is a major change.
 
 ### Changed
 
+- The Python floor is 3.11, down from 3.13. Nothing in gifhole needed 3.13,
+  and requiring it meant that Debian 12 and Ubuntu 22.04 users had to install
+  a second Python before they could install gifhole at all. Resolved
+  dependency versions are unchanged. CI now runs the floor rather than the
+  newest release, since development already exercises the newest every day.
 - The import picker pre-selects only the main GIF when it came from the
   bookmarklet. A single GIF's page hands over the hero plus its size variants;
   they are all imported but only the hero is ticked, so you are not filing five

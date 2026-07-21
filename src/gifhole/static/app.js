@@ -1611,6 +1611,59 @@ let libStats = null;
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+// Apply a search from a stats click: close the panel, drop any tag filter, and
+// put the query in the box so the wall shows exactly those GIFs. The query is a
+// filter word ("unused", "untagged") or a tag name.
+function filterBy(query) {
+  closeLibrary();
+  activeTags.clear();
+  search.value = query;
+  load();
+}
+
+// A number in the stats block, clickable to filter the wall to it. Zero counts
+// render muted and inert, so "never pasted: 0" reads as good news, not a link.
+function statLink(label, count, query, hot = false) {
+  const el = document.createElement(count ? "button" : "span");
+  el.className = "statlink" + (hot && count ? " hot" : "");
+  el.textContent = `${label}: ${count}`;
+  if (count) el.addEventListener("click", () => filterBy(query));
+  return el;
+}
+
+// Library-health numbers, pointed at future use: what to prune (never pasted),
+// filing debt, and the heaviest tags. Each is a shortcut into the wall.
+function renderStats(s) {
+  const el = $("#libstats");
+  const prune = document.createElement("div");
+  prune.className = "statrow";
+  prune.append(statLink("never pasted", s.unused ?? 0, "unused", true));
+
+  const debt = document.createElement("div");
+  debt.className = "statrow";
+  debt.append(
+    statLink("untagged", s.missing_tags ?? 0, "untagged"),
+    statLink("undescribed", s.missing_description ?? 0, "undescribed"),
+    statLink("untitled", s.untitled ?? 0, "untitled"),
+  );
+
+  const tags = document.createElement("div");
+  tags.className = "statrow tags";
+  const label = document.createElement("span");
+  label.className = "statlabel";
+  label.textContent = "top tags";
+  tags.append(label);
+  for (const { tag, count } of s.top_tags || []) {
+    const b = document.createElement("button");
+    b.className = "statlink";
+    b.textContent = `${tag} ${count}`;
+    b.addEventListener("click", () => filterBy(tag));
+    tags.append(b);
+  }
+
+  el.replaceChildren(prune, debt, ...(s.top_tags?.length ? [tags] : []));
+}
+
 function paintScopeCount() {
   const n = libStats ? (libStats[libScope.value] ?? 0) : 0;
   $("#libscopecount").textContent = n ? `${plural(n, "GIF")} to describe` : "nothing to do";
@@ -1646,6 +1699,7 @@ async function openLibrary() {
     `gifhole ${body.version} · ${plural(s.total, "GIF")} · ${mb} · ` +
     `${plural(s.tags, "tag")} · ${s.described} described`;
   paintScopeCount();
+  renderStats(s);
   // Re-read needs an engine and something to read. Disabled rather than hidden,
   // with the reason in the tooltip, so it reads as "not now" not "gone".
   const reocr = $("#libreocr");

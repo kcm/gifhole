@@ -101,6 +101,8 @@ FILTERS = {
     "untagged": lambda gif: not gif.tags,
     "undescribed": lambda gif: not gif.description.strip(),
     "untitled": lambda gif: not gif.title.strip(),
+    # Never once copied: the prune shortlist. Search "unused" to review them.
+    "unused": lambda gif: gif.copies == 0,
 }
 
 
@@ -431,7 +433,9 @@ class Store:
         raise ValueError(f"unknown scope: {scope}")
 
     def stats(self) -> dict:
-        """Counts behind the library panel, so a run can be sized before it starts."""
+        """Counts behind the library panel: what each describe scope covers, and
+        library-health numbers pointed at future use (what to prune, filing
+        debt, which tags are load-bearing)."""
         gifs = self.list_gifs()
         return {
             "total": len(gifs),
@@ -443,6 +447,12 @@ class Store:
             "described": sum(1 for g in gifs if g.enriched_at),
             "tags": len(self.all_tags()),
             "bytes": sum(g.bytes for g in gifs),
+            # Pruning-oriented, actionable via the matching filter word.
+            "unused": sum(1 for g in gifs if g.copies == 0),
+            "untitled": sum(1 for g in gifs if not g.title.strip()),
+            # Vocabulary at a glance: the heaviest tags, for spotting the ones
+            # worth merging or the shelves that hold most of the library.
+            "top_tags": [{"tag": t, "count": c} for t, c in self.all_tags()[:12]],
         }
 
     def retag(

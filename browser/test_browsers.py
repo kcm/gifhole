@@ -640,3 +640,45 @@ def test_bookmarklet_picker_selects_only_the_hero_and_disarms(page, server):
     assert page.locator("#pickgo").is_disabled()
     assert page.locator("#picknone").is_disabled()
     assert page.errors == []
+
+
+def test_library_stats_are_clickable_shortcuts(page, server):
+    """The library-health block: a prune-oriented 'never pasted' and filing-debt
+    numbers that filter the wall when clicked."""
+    page.route(
+        "**/api/library",
+        lambda r: r.fulfill(
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "version": "0.1.0",
+                    "scopes": ["missing_either", "all"],
+                    "stats": {
+                        "total": 10,
+                        "bytes": 2048,
+                        "tags": 3,
+                        "described": 4,
+                        "unused": 6,
+                        "missing_tags": 2,
+                        "missing_description": 5,
+                        "untitled": 10,
+                        "missing_either": 5,
+                        "all": 10,
+                        "top_tags": [{"tag": "funny", "count": 8}, {"tag": "cat", "count": 3}],
+                    },
+                }
+            ),
+        ),
+    )
+    page.goto(server)
+    page.click("#librarybtn")
+    stats = page.locator("#libstats")
+    stats.wait_for(state="visible", timeout=5_000)
+    assert "never pasted: 6" in stats.inner_text()
+    assert "funny 8" in stats.inner_text()
+
+    # Clicking a stat closes the panel and filters the wall to it.
+    page.locator("#libstats .statlink", has_text="never pasted").click()
+    page.locator("#library").wait_for(state="hidden", timeout=5_000)
+    assert page.input_value("#search") == "unused"
+    assert page.errors == []

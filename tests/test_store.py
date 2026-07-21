@@ -361,3 +361,17 @@ def test_duplicate_count_caches_and_invalidates(store):
     # Removing one member changes the library, so the signature must move.
     store.remove(a.id)
     assert store.library_signature() != before
+
+
+def test_unused_filter_and_prune_stats(store):
+    """The pruning shortcut: 'unused' finds never-pasted GIFs, and stats counts
+    them (plus untitled and the heaviest tags) for the library-health block."""
+    a = store.add_bytes("a.gif", make_textured_gif(1), tags="cat")
+    store.add_bytes("b.gif", make_textured_gif(2))  # untagged, never pasted
+    store.bump_copies(a.id)  # a is now pasted, b is not
+
+    assert [g.filename for g in store.list_gifs("unused")] == ["b.gif"]
+    s = store.stats()
+    assert s["unused"] == 1  # only b was never pasted
+    assert s["untitled"] == 2  # neither has a title
+    assert s["top_tags"] == [{"tag": "cat", "count": 1}]

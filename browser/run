@@ -28,6 +28,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Reap orphans from runs that were killed before their own trap could fire
+# (a SIGKILL, or the old exec-past-the-trap bug). The app server runs forever,
+# so a leaked container sits at "Up 40 hours" until something sweeps it. Ours
+# are the only gifhole-app-*/gifhole-browser-* names, so this is safe.
+docker ps -aq --filter 'name=^gifhole-app-' | xargs -r docker rm -f >/dev/null 2>&1 || true
+docker network ls --format '{{.Name}}' | grep '^gifhole-browser-' \
+  | xargs -r -n1 docker network rm >/dev/null 2>&1 || true
+
 echo "building the gifhole image..."
 docker build -q -t gifhole:browsertest "$repo" >/dev/null
 
@@ -50,7 +58,11 @@ for i in range(6):
 fr[0].save("/library/gifs/demo.gif", save_all=True, append_images=fr[1:], duration=80)
 '
 
-exec docker run --rm -i --network "$net" \
+# Not `exec`: exec replaces this shell, so the EXIT trap would never fire and
+# the app container plus its network would leak (they did, for ~40h each). Run
+# it as a child, keep its status, and let cleanup run on the way out.
+status=0
+docker run --rm -i --network "$net" \
   -v "$repo/browser":/browser:ro \
   -e GIFHOLE_URL="http://$app:8777" \
   -w /w \
@@ -68,4 +80,5 @@ exec docker run --rm -i --network "$net" \
       set -- --browser chromium --browser firefox --browser webkit
     fi
     exec pytest browser -q "$@"
-  ' bash "$@"
+  ' bash "$@" || status=$?
+exit "$status"

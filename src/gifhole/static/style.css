@@ -1358,6 +1358,57 @@ button[disabled]:active {
   font-variant: small-caps;
 }
 
+/* Library-health stats: dense rows of clickable numbers, a shortcut into the
+   wall. Restrained, monospace-ish, no chart junk. */
+.libstats {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.libstats .statrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.libstats .statrow.tags {
+  gap: 4px 10px;
+}
+
+.libstats .statlabel {
+  color: var(--panel-muted);
+  font-variant: small-caps;
+}
+
+/* A clickable stat is a link; a zero renders as an inert muted span. */
+.libstats .statlink {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--link);
+  text-decoration: var(--link-decoration);
+  cursor: pointer;
+}
+
+.libstats span.statlink {
+  color: var(--panel-muted);
+  text-decoration: none;
+  cursor: default;
+}
+
+.libstats .statlink.hot {
+  color: var(--link-hot);
+}
+
+.libstats .statlink:hover {
+  filter: none;
+  opacity: 0.75;
+}
+
 button.danger {
   color: var(--link-hot);
 }
