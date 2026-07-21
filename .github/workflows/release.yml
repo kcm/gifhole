@@ -43,7 +43,7 @@ jobs:
           printf 'number=%s\n' "${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Check out the tag being released
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ steps.version.outputs.tag }}
 
@@ -53,7 +53,7 @@ jobs:
       # all, so the notes step failed. Tests and the build still run against
       # the tag, since that is the code being released.
       - name: Check out main for the release tooling
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           ref: main
           path: .tooling
