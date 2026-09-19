@@ -1453,3 +1453,32 @@ body.readonly .hint::after {
   font-weight: bold;
   color: var(--link-hot);
 }
+
+.card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.oversize {
+  color: var(--danger, #b91c1c);
+  font-weight: 600;
+  cursor: help;
+}
+
+.card-actions .compress {
+  color: var(--accent);
+  padding: 0.15rem 0.35rem;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.card-actions .compress:hover {
+  background: var(--chip-hover);
+  border-radius: var(--chip-radius);
+}

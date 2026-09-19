@@ -55,6 +55,37 @@ def test_edit_title_and_tags(client):
     assert res.json()["tags"] == ["ocean", "surf"]
 
 
+def test_compress_endpoint_without_ffmpeg_is_503(client, monkeypatch):
+    from gifhole import fetch
+
+    monkeypatch.setattr(fetch, "ffmpeg_available", lambda: False)
+    gif_id = upload(client, "heavy.gif").json()["id"]
+    res = client.post(f"/api/gifs/{gif_id}/compress")
+    assert res.status_code == 503
+
+
+def test_compress_endpoint_creates_compressed_copy(client, monkeypatch):
+    from gifhole import fetch
+    from tests.conftest import make_gif
+
+    monkeypatch.setattr(fetch, "ffmpeg_available", lambda: True)
+    monkeypatch.setattr(fetch, "compress_gif", lambda data: make_gif(16, 16))
+
+    gif_id = upload(client, "heavy.gif", tags="fun").json()["id"]
+    client.patch(f"/api/gifs/{gif_id}", json={"title": "Heavy GIF"})
+
+    res = client.post(f"/api/gifs/{gif_id}/compress")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["gif"]["filename"] == "heavy-compressed.gif"
+    assert "compressed" in body["gif"]["tags"]
+    assert body["gif"]["title"] == "Heavy GIF (compressed)"
+
+    gifs = client.get("/api/gifs").json()["gifs"]
+    assert len(gifs) == 2
+
+
 def test_copy_counter_increments_and_sorts(client):
     a = upload(client, "a.gif").json()["id"]
     upload(client, "b.gif")

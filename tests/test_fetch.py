@@ -315,3 +315,24 @@ def test_data_url_attribute_is_scraped():
     html = '<html><body><div data-url="https://i.redd.it/viadata.gif"></div></body></html>'
     found = {c.url for c in fetch.candidates_from_html(html, "https://old.reddit.com/")}
     assert "https://i.redd.it/viadata.gif" in found
+
+
+def test_compress_gif_raises_when_ffmpeg_missing(monkeypatch):
+    monkeypatch.setattr(fetch, "ffmpeg_available", lambda: False)
+    with pytest.raises(fetch.FetchError, match="ffmpeg is not installed"):
+        fetch.compress_gif(b"GIF89a...")
+
+
+def test_compress_gif_invokes_ffmpeg(monkeypatch):
+    monkeypatch.setattr(fetch, "ffmpeg_available", lambda: True)
+
+    def fake_run(args, capture_output=True, timeout=120):
+        import subprocess
+        from pathlib import Path
+
+        Path(args[-1]).write_bytes(b"GIF89a_compressed")
+        return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    compressed = fetch.compress_gif(b"GIF89a_original")
+    assert compressed == b"GIF89a_compressed"

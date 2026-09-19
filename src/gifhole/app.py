@@ -420,6 +420,40 @@ def create_app(
         store.bump_copies(gif_id)
         return JSONResponse({"ok": True})
 
+    @app.post("/api/gifs/{gif_id}/compress")
+    def compress_gif(gif_id: int) -> JSONResponse:
+        """Compress an oversized GIF to fit under modern chat upload limits (e.g. Discord 10MB)."""
+        gif = store.get(gif_id)
+        if gif is None:
+            raise HTTPException(404, "no such gif")
+        if not fetch.ffmpeg_available():
+            raise HTTPException(503, "ffmpeg is not installed, so compression is unavailable")
+        src_path = store.gifs_dir / gif.filename
+        if not src_path.is_file():
+            raise HTTPException(404, "source file missing")
+        try:
+            data = fetch.compress_gif(src_path.read_bytes())
+        except fetch.FetchError as err:
+            raise HTTPException(500, str(err)) from err
+
+        stem = Path(gif.filename).stem
+        new_name = f"{stem}-compressed.gif"
+        tags = f"{' '.join(gif.tags)} compressed".strip()
+        new_gif = store.add_bytes(new_name, data, tags=tags, source_url=gif.source_url)
+        if gif.title:
+            store.update(new_gif.id, title=f"{gif.title} (compressed)")
+        if gif.ocr_text:
+            store.set_ocr(new_gif.id, gif.ocr_text)
+        if gif.description:
+            store.set_enrichment(new_gif.id, gif.description)
+
+        bus.emit(
+            "compress",
+            f"compressed {gif.filename} ({gif.bytes // 1024} KB -> {new_gif.bytes // 1024} KB)",
+        )
+        final_gif = store.get(new_gif.id) or new_gif
+        return JSONResponse({"ok": True, "gif": final_gif.as_dict()})
+
     @app.delete("/api/gifs/{gif_id}")
     def delete(gif_id: int) -> JSONResponse:
         """Moves the file to .trash; nothing is erased from disk."""

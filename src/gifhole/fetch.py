@@ -316,6 +316,46 @@ def video_to_gif(data: bytes, suffix: str = ".mp4") -> bytes:
         return dest.read_bytes()
 
 
+def compress_gif(
+    data: bytes,
+    target_width: int = 360,
+    fps: int = 12,
+    max_colors: int = 128,
+) -> bytes:
+    """Compress a GIF using ffmpeg to fit under modern chat limits (e.g. Discord 10MB)."""
+    if not ffmpeg_available():
+        raise FetchError("ffmpeg is not installed, so GIF cannot be compressed")
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "in.gif"
+        dest = Path(tmp) / "out.gif"
+        src.write_bytes(data)
+        vf = (
+            f"fps={fps},scale='min({target_width},iw)':-2:flags=lanczos,"
+            f"split[a][b];[a]palettegen=max_colors={max_colors}:stats_mode=diff[p];"
+            "[b][p]paletteuse=dither=bayer:bayer_scale=3"
+        )
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-y",
+                "-i",
+                str(src),
+                "-vf",
+                vf,
+                "-loop",
+                "0",
+                str(dest),
+            ],
+            capture_output=True,
+            timeout=120,
+        )
+        if result.returncode != 0 or not dest.exists():
+            tail = result.stderr.decode("utf-8", "replace").strip().splitlines()[-3:]
+            raise FetchError("ffmpeg compression failed: " + " / ".join(tail))
+        return dest.read_bytes()
+
+
 # -- orchestration -----------------------------------------------------------
 
 
