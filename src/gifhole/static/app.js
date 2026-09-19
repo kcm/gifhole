@@ -173,7 +173,7 @@ function card(gif) {
             data-placeholder="add a description"></span>
       <div class="ocrfoot">
         <button class="undo" title="undo describe, restore the previous text and tags" hidden>↶</button>
-        <button class="describe" title="describe with Claude">describe</button>
+        <button class="describe" title="describe with AI">describe</button>
       </div>
     </div>`;
 
@@ -1759,10 +1759,23 @@ async function loadModelPicker() {
   );
   // Store only a deliberate choice, and only when it differs from the default,
   // so the default can keep moving with the server without a stale pin.
+  const heading = $("#libdescribeheading");
+  const updateHeading = (mId) => {
+    if (heading) heading.textContent = `Describe with ${activeProviderName(mId)}`;
+  };
+  updateHeading(current);
   sel.onchange = () => {
     if (sel.value === body.default) localStorage.removeItem(MODEL_KEY);
     else localStorage.setItem(MODEL_KEY, sel.value);
+    updateHeading(sel.value);
   };
+}
+
+function activeProviderName(modelId) {
+  const mid = (modelId || chosenModel() || $("#libmodel")?.value || "").toLowerCase();
+  if (mid.startsWith("gemini") || mid.startsWith("gemma")) return "Gemini";
+  if (mid.startsWith("claude")) return "Claude";
+  return "AI";
 }
 
 // Built from location.origin, so it points at wherever this instance actually

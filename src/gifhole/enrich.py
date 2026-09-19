@@ -1,4 +1,4 @@
-"""Optional Claude-powered descriptions, meme identification, and tags.
+"""Optional Gemini and Claude powered descriptions, meme identification, and tags.
 
 Strictly opt-in. Local OCR already runs on every GIF and needs no key; this
 adds the two things OCR cannot give you: what is actually happening in the
@@ -17,20 +17,86 @@ from gifhole.frames import sample_frames, to_png_bytes
 
 log = logging.getLogger(__name__)
 
-# Describing a reaction GIF is a light vision task (a sentence, tags from a
-# fixed vocabulary, a meme name), so the default is Sonnet rather than Opus:
-# much cheaper and faster, still strong on the one part that rewards a bigger
-# model, recognising which meme it is. Overridable per instance by
-# GIFHOLE_ENRICH_MODEL, and per describe by the picker in the library panel.
-# There is no lock-in to worry about while nothing here is an embedding.
-DEFAULT_MODEL = "claude-sonnet-5"
+
+def gemini_api_key() -> str | None:
+    return (
+        os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("GOOGLE_API_KEY")
+        or os.environ.get("GOOGLE_GENAI_API_KEY")
+    )
+
+
+def _detect_default_model() -> str:
+    if os.environ.get("GIFHOLE_ENRICH_BACKEND") == "gemini":
+        return "gemini-3.6-flash"
+    if os.environ.get("GIFHOLE_ENRICH_BACKEND") == "claude":
+        return "claude-sonnet-5"
+    if gemini_api_key():
+        return "gemini-3.6-flash"
+    return "claude-sonnet-5"
+
+
+DEFAULT_MODEL = _detect_default_model()
 
 
 def default_model() -> str:
     return os.environ.get("GIFHOLE_ENRICH_MODEL") or DEFAULT_MODEL
 
 
+GEMINI_MODELS = [
+    {"id": "gemini-3.6-flash", "name": "Gemini 3.6 Flash"},
+    {"id": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"},
+    {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash"},
+    {"id": "gemini-3.5-flash", "name": "Gemini 3.5 Flash"},
+    {"id": "gemini-flash-latest", "name": "Gemini Flash Latest"},
+    {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash"},
+    {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro"},
+]
+
 _models_cache: list[dict] | None = None
+
+
+def fetch_gemini_models() -> list[dict]:
+    """Query Google API for models accessible to this key (free or paid tier).
+
+    Falls back to GEMINI_MODELS if the dynamic query fails or is offline.
+    """
+    key = gemini_api_key()
+    if not key:
+        return list(GEMINI_MODELS)
+    url = "https://generativelanguage.googleapis.com/v1beta/models"
+    try:
+        import httpx
+
+        with httpx.Client(timeout=10.0) as client:
+            res = client.get(url, headers={"x-goog-api-key": key})
+            if res.status_code == 200:
+                raw_models = res.json().get("models", [])
+                models = []
+                for m in raw_models:
+                    mid = m.get("name", "").removeprefix("models/")
+                    methods = m.get("supportedGenerationMethods", [])
+                    if "generateContent" not in methods:
+                        continue
+                    low = mid.lower()
+                    excluded = (
+                        "tts",
+                        "transcribe",
+                        "lyria",
+                        "robotics",
+                        "audio",
+                        "deep-research",
+                        "customtools",
+                    )
+                    if any(ex in low for ex in excluded):
+                        continue
+                    if low.startswith("gemini") or low.startswith("gemma"):
+                        models.append({"id": mid, "name": m.get("displayName") or mid})
+                if models:
+                    return models
+    except Exception as exc:  # noqa: BLE001 - a listing failure falls back cleanly
+        log.debug("could not dynamically list gemini models: %s", exc)
+    return list(GEMINI_MODELS)
 
 
 def list_models() -> list[dict]:
@@ -46,17 +112,26 @@ def list_models() -> list[dict]:
     ok, _ = available()
     if not ok:
         return []
-    try:
-        import anthropic
 
-        client = anthropic.Anthropic()
-        _models_cache = [
-            {"id": m.id, "name": getattr(m, "display_name", None) or m.id}
-            for m in client.models.list(limit=100)
-        ]
-    except Exception as exc:  # noqa: BLE001 - a listing failure just means no picker
-        log.debug("could not list models: %s", exc)
-        return []
+    models: list[dict] = []
+    g_ok, _ = gemini_available()
+    if g_ok:
+        models.extend(fetch_gemini_models())
+
+    c_ok, _ = claude_available()
+    if c_ok:
+        try:
+            import anthropic
+
+            client = anthropic.Anthropic()
+            models.extend(
+                {"id": m.id, "name": getattr(m, "display_name", None) or m.id}
+                for m in client.models.list(limit=100)
+            )
+        except Exception as exc:  # noqa: BLE001 - a listing failure just means no picker
+            log.debug("could not list anthropic models: %s", exc)
+
+    _models_cache = models
     return _models_cache
 
 
@@ -144,16 +219,21 @@ class EnrichError(Exception):
     """Enrichment could not run: missing package, key, or a failed call."""
 
 
-def available() -> tuple[bool, str]:
-    """Report whether enrichment can actually run, and why not when it cannot.
+def gemini_available() -> tuple[bool, str]:
+    if gemini_api_key():
+        return True, ""
+    try:
+        from google import genai
 
-    This asks the SDK rather than checking env vars itself. Constructing a
-    client resolves every credential source it supports, including an
-    `ant auth login` profile, and costs no network call. Reading the env alone
-    would wrongly disable the feature for profile users; reporting "available"
-    on the strength of the package being installed (which is what this used to
-    do) is worse, because the button then looks live and every call fails.
-    """
+        client = genai.Client()
+        if client:
+            return True, ""
+    except Exception:
+        pass
+    return False, "no Gemini API key. Set GEMINI_API_KEY or GOOGLE_API_KEY"
+
+
+def claude_available() -> tuple[bool, str]:
     try:
         import anthropic
     except ImportError:
@@ -170,31 +250,127 @@ def available() -> tuple[bool, str]:
     return True, ""
 
 
-def describe_gif(
-    path: Path,
-    frames: int = 3,
-    vocabulary: list[str] | None = None,
-    model: str | None = None,
-) -> dict:
-    """Ask Claude what a GIF shows. Returns {description, meme_name, tags}.
+def available() -> tuple[bool, str]:
+    """Report whether enrichment can actually run, and why not when it cannot."""
+    g_ok, _ = gemini_available()
+    if g_ok:
+        return True, ""
+    c_ok, _ = claude_available()
+    if c_ok:
+        return True, ""
+    return False, "no LLM API key. Set GEMINI_API_KEY or ANTHROPIC_API_KEY"
 
-    `vocabulary` is the library's existing tags, most-used first. Passing it
-    keeps the tagging consistent instead of inventing a synonym per GIF.
-    `model` overrides the default for this one call (the picker's choice).
-    """
-    vocabulary = vocabulary or []
-    model = model or default_model()
-    ok, why = available()
-    if not ok:
-        raise EnrichError(why)
+
+MAX_GEMINI_ENUM_ITEMS = 40
+
+
+def build_gemini_schema(vocabulary: list[str], max_new: int = MAX_NEW_TAGS) -> dict:
+    # Google GenAI API responseSchema can reject large enums (> 50-100 items)
+    # with 400 Invalid Argument. We cap the enum items to the most-frequent tags
+    # (vocabulary is ordered by frequency), while leaving the full list in the prompt.
+    capped_vocab = vocabulary[:MAX_GEMINI_ENUM_ITEMS] if vocabulary else []
+    schema = build_schema(capped_vocab, max_new)
+    return {k: v for k, v in schema.items() if k != "additionalProperties"}
+
+
+def _describe_with_gemini(
+    images: list[bytes],
+    vocabulary: list[str],
+    model: str = "gemini-3.6-flash",
+) -> dict:
+    import base64
+
+    import httpx
+
+    key = gemini_api_key()
+    prompt_text = PROMPT + vocabulary_note(vocabulary)
+
+    if not key:
+        try:
+            from google import genai
+            from google.genai import types
+
+            client = genai.Client()
+            parts = [types.Part.from_bytes(data=png, mime_type="image/png") for png in images]
+            parts.append(types.Part.from_text(text=prompt_text))
+            response = client.models.generate_content(
+                model=model,
+                contents=parts,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=build_gemini_schema(vocabulary),
+                ),
+            )
+            text = response.text or ""
+            data = json.loads(text)
+            return merge_result(data, vocabulary)
+        except Exception as exc:
+            raise EnrichError(f"Gemini call failed: {exc}") from exc
+
+    parts: list[dict] = [
+        {
+            "inline_data": {
+                "mime_type": "image/png",
+                "data": base64.standard_b64encode(png).decode("ascii"),
+            }
+        }
+        for png in images
+    ]
+    parts.append({"text": prompt_text})
+
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "response_mime_type": "application/json",
+            "response_schema": build_gemini_schema(vocabulary),
+        },
+    }
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            res = client.post(
+                url,
+                headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                json=payload,
+            )
+    except Exception as exc:
+        raise EnrichError(f"Gemini call failed: {exc}") from exc
+
+    if res.status_code != 200:
+        try:
+            err_msg = res.json().get("error", {}).get("message", res.text)
+        except Exception:
+            err_msg = res.text
+        raise EnrichError(f"Gemini API error ({res.status_code}): {err_msg}")
+
+    body = res.json()
+    candidates = body.get("candidates") or []
+    if not candidates:
+        raise EnrichError("Gemini returned no candidates")
+
+    candidate = candidates[0]
+    if candidate.get("finishReason") == "SAFETY":
+        raise EnrichError("Gemini declined to describe this image due to safety filters")
+
+    parts_resp = candidate.get("content", {}).get("parts", [])
+    text = next((p["text"] for p in parts_resp if "text" in p), "")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise EnrichError(f"unparseable Gemini response: {text[:120]}") from exc
+
+    return merge_result(data, vocabulary)
+
+
+def _describe_with_claude(
+    images: list[bytes],
+    vocabulary: list[str],
+    model: str = "claude-sonnet-5",
+) -> dict:
+    import base64
 
     import anthropic
-
-    images = [to_png_bytes(f) for f in sample_frames(path, frames)]
-    if not images:
-        raise EnrichError("could not read any frames from that GIF")
-
-    import base64
 
     content: list[dict] = [
         {
@@ -231,6 +407,33 @@ def describe_gif(
         raise EnrichError(f"unparseable response: {text[:120]}") from exc
 
     return merge_result(data, vocabulary)
+
+
+def describe_gif(
+    path: Path,
+    frames: int = 3,
+    vocabulary: list[str] | None = None,
+    model: str | None = None,
+) -> dict:
+    """Ask an LLM (Gemini or Claude) what a GIF shows. Returns {description, meme_name, tags}.
+
+    `vocabulary` is the library's existing tags, most-used first. Passing it
+    keeps the tagging consistent instead of inventing a synonym per GIF.
+    `model` overrides the default for this one call (the picker's choice).
+    """
+    vocabulary = vocabulary or []
+    model = model or default_model()
+    ok, why = available()
+    if not ok:
+        raise EnrichError(why)
+
+    images = [to_png_bytes(f) for f in sample_frames(path, frames)]
+    if not images:
+        raise EnrichError("could not read any frames from that GIF")
+
+    if model.startswith("gemini") or model.startswith("gemma"):
+        return _describe_with_gemini(images, vocabulary, model)
+    return _describe_with_claude(images, vocabulary, model)
 
 
 def merge_result(data: dict, vocabulary: list[str]) -> dict:

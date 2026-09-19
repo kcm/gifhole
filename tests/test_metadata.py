@@ -30,6 +30,15 @@ def test_sample_frames_handles_single_frame_gif(tmp_path):
     assert len(sample_frames(path, count=3)) == 1
 
 
+def test_sample_frames_rejects_excessive_dimensions(tmp_path):
+    path = tmp_path / "bomb.gif"
+    data = bytearray(make_gif(8, 6))
+    data[6:8] = (10001).to_bytes(2, "little")
+    path.write_bytes(data)
+    with pytest.raises(ValueError, match="exceed safe limits"):
+        sample_frames(path)
+
+
 def test_upscale_only_grows_small_frames(tmp_path):
     path = tmp_path / "small.gif"
     path.write_bytes(make_gif(40, 30))
@@ -300,6 +309,285 @@ def test_null_meme_name_does_not_crash():
     )
     assert out["meme_name"] == ""
     assert out["description"] == "d"
+
+
+# -- gemini backend ----------------------------------------------------------
+
+from gifhole.enrich import (  # noqa: E402
+    EnrichError,
+    _describe_with_gemini,
+    available,
+    build_gemini_schema,
+    gemini_api_key,
+    gemini_available,
+)
+
+
+def test_gemini_schema_omits_additional_properties():
+    schema = build_gemini_schema(["cat", "dog"])
+    assert "additionalProperties" not in schema
+    assert schema["properties"]["known_tags"]["items"]["enum"] == ["cat", "dog"]
+
+
+def test_gemini_schema_caps_large_vocabulary():
+    tags = [f"tag{i}" for i in range(100)]
+    schema = build_gemini_schema(tags)
+    assert len(schema["properties"]["known_tags"]["items"]["enum"]) == 40
+
+
+def test_gemini_api_key_detection(monkeypatch):
+    for var in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    assert gemini_api_key() is None
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "g-key-1")
+    assert gemini_api_key() == "g-key-1"
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-key-2")
+    assert gemini_api_key() == "gemini-key-2"
+
+
+def test_gemini_availability_and_fallback(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_API_KEY", raising=False)
+
+    ok, why = gemini_available()
+    assert not ok
+    assert "no Gemini API key" in why
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    ok, why = gemini_available()
+    assert ok
+    assert why == ""
+
+    # available() returns True if either Gemini or Claude is available
+    ok, _ = available()
+    assert ok
+
+
+def test_describe_with_gemini_success(monkeypatch):
+    import httpx
+
+    recorded = {}
+
+    class MockResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": json.dumps(
+                                        {
+                                            "description": "a dog eating pizza",
+                                            "meme_name": "pizza dog",
+                                            "known_tags": ["dog"],
+                                            "new_tags": ["pizza"],
+                                        }
+                                    )
+                                }
+                            ]
+                        },
+                        "finishReason": "STOP",
+                    }
+                ]
+            }
+
+    class MockClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def post(self, url, headers=None, json=None):
+            recorded["url"] = url
+            recorded["headers"] = headers
+            recorded["json"] = json
+            return MockResponse()
+
+    monkeypatch.setattr(httpx, "Client", MockClient)
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-gemini-key")
+
+    result = _describe_with_gemini(
+        images=[b"fake-png-1", b"fake-png-2"],
+        vocabulary=["dog", "reaction"],
+        model="gemini-2.5-flash",
+    )
+
+    assert result["description"].startswith("pizza dog: ")
+    assert "dog" in result["tags"]
+    assert "pizza" in result["tags"]
+    assert recorded["headers"]["x-goog-api-key"] == "fake-gemini-key"
+    assert "models/gemini-2.5-flash:generateContent" in recorded["url"]
+    assert len(recorded["json"]["contents"][0]["parts"]) == 3  # 2 images + 1 prompt text
+
+
+def test_describe_with_gemini_safety_block(monkeypatch):
+    import httpx
+
+    class MockResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "candidates": [
+                    {
+                        "finishReason": "SAFETY",
+                    }
+                ]
+            }
+
+    class MockClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def post(self, url, headers=None, json=None):
+            return MockResponse()
+
+    monkeypatch.setattr(httpx, "Client", MockClient)
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-gemini-key")
+
+    with pytest.raises(EnrichError, match="safety filters"):
+        _describe_with_gemini(
+            images=[b"fake-png"],
+            vocabulary=[],
+            model="gemini-2.5-flash",
+        )
+
+
+def test_describe_with_gemini_api_error(monkeypatch):
+    import httpx
+
+    class MockResponse:
+        status_code = 403
+        text = "Forbidden"
+
+        def json(self):
+            return {"error": {"message": "Invalid API key"}}
+
+    class MockClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def post(self, url, headers=None, json=None):
+            return MockResponse()
+
+    monkeypatch.setattr(httpx, "Client", MockClient)
+    monkeypatch.setenv("GEMINI_API_KEY", "bad-key")
+
+    with pytest.raises(EnrichError, match=r"Gemini API error \(403\): Invalid API key"):
+        _describe_with_gemini(
+            images=[b"fake-png"],
+            vocabulary=[],
+            model="gemini-2.5-flash",
+        )
+
+
+def test_list_models_includes_gemini(monkeypatch):
+    import gifhole.enrich as enrich
+
+    monkeypatch.setattr(enrich, "_models_cache", None)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setattr(enrich, "claude_available", lambda: (False, "no key"))
+
+    models = enrich.list_models()
+    model_ids = {m["id"] for m in models}
+    assert "gemini-2.5-flash" in model_ids
+    assert "gemini-2.5-pro" in model_ids
+
+
+def test_fetch_gemini_models_dynamic(monkeypatch):
+    import httpx
+
+    import gifhole.enrich as enrich
+
+    monkeypatch.setenv("GEMINI_API_KEY", "paid-tier-key")
+
+    class MockResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "models": [
+                    {
+                        "name": "models/gemini-3.8-flash",
+                        "displayName": "Gemini 3.8 Flash",
+                        "supportedGenerationMethods": ["generateContent"],
+                    },
+                    {
+                        "name": "models/gemini-2.5-pro",
+                        "displayName": "Gemini 2.5 Pro",
+                        "supportedGenerationMethods": ["generateContent"],
+                    },
+                    {
+                        "name": "models/gemini-3.1-flash-tts-preview",
+                        "displayName": "TTS Model",
+                        "supportedGenerationMethods": ["generateContent"],
+                    },
+                ]
+            }
+
+    class MockClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url, headers=None):
+            return MockResponse()
+
+    monkeypatch.setattr(httpx, "Client", MockClient)
+    models = enrich.fetch_gemini_models()
+    model_ids = [m["id"] for m in models]
+    assert "gemini-3.8-flash" in model_ids
+    assert "gemini-2.5-pro" in model_ids
+    assert "gemini-3.1-flash-tts-preview" not in model_ids  # TTS filtered out
+
+
+def test_describe_gif_routes_to_gemini(tmp_path, monkeypatch):
+    import gifhole.enrich as enrich
+
+    p = tmp_path / "test.gif"
+    p.write_bytes(make_gif())
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    called = {}
+
+    def fake_gemini(images, vocabulary, model):
+        called["gemini"] = True
+        called["model"] = model
+        return {"description": "described by gemini", "meme_name": "", "tags": []}
+
+    monkeypatch.setattr(enrich, "_describe_with_gemini", fake_gemini)
+
+    result = enrich.describe_gif(p, model="gemini-2.5-flash")
+    assert called.get("gemini") is True
+    assert called.get("model") == "gemini-2.5-flash"
+    assert result["description"] == "described by gemini"
 
 
 # -- perceptual hashing ------------------------------------------------------

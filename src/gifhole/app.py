@@ -716,7 +716,7 @@ def create_app(
             except enrich.EnrichError as exc:
                 if any(w in str(exc).lower() for w in ("authentication", "api_key", "api key")):
                     auth_block["why"] = (
-                        "no API key. Set ANTHROPIC_API_KEY or run `ant auth login`, then try again"
+                        "no valid API key. Set GEMINI_API_KEY or ANTHROPIC_API_KEY, then try again"
                     )
                 bus.emit("describe", f"failed: {gif.filename}: {exc}", level="error")
                 raise
