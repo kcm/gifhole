@@ -1482,3 +1482,16 @@ body.readonly .hint::after {
   background: var(--chip-hover);
   border-radius: var(--chip-radius);
 }
+
+.card-actions .fav {
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.1rem 0.25rem;
+}
+
+.card-actions .fav:hover,
+.card-actions .fav.starred {
+  color: #eab308;
+}

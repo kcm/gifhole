@@ -264,6 +264,16 @@ class Store:
             row = self.db.execute("SELECT * FROM gifs WHERE id = ?", (gif_id,)).fetchone()
             return self._row_to_gif(row) if row else None
 
+    def toggle_favorite(self, gif_id: int) -> Gif | None:
+        with self._lock:
+            gif = self.get(gif_id)
+            if gif is None:
+                return None
+            new_fav = 0 if gif.favorite else 1
+            self.db.execute("UPDATE gifs SET favorite = ? WHERE id = ?", (new_fav, gif_id))
+            self.db.commit()
+            return self.get(gif_id)
+
     def all_tags(self) -> list[tuple[str, int]]:
         counts: dict[str, int] = {}
         with self._lock:

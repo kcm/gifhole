@@ -408,6 +408,7 @@ def create_app(
             title=payload.get("title"),
             tags=payload.get("tags"),
             description=payload.get("description"),
+            favorite=payload.get("favorite"),
         )
         if gif is None:
             raise HTTPException(404, "no such gif")

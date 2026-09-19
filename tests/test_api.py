@@ -55,6 +55,17 @@ def test_edit_title_and_tags(client):
     assert res.json()["tags"] == ["ocean", "surf"]
 
 
+def test_edit_favorite(client):
+    gif_id = upload(client).json()["id"]
+    res = client.patch(f"/api/gifs/{gif_id}", json={"favorite": True})
+    assert res.json()["favorite"] == 1
+    gifs = client.get("/api/gifs").json()["gifs"]
+    assert gifs[0]["favorite"] == 1
+
+    res = client.patch(f"/api/gifs/{gif_id}", json={"favorite": False})
+    assert res.json()["favorite"] == 0
+
+
 def test_compress_endpoint_without_ffmpeg_is_503(client, monkeypatch):
     from gifhole import fetch
 
