@@ -47,9 +47,7 @@ class Job:
 class JobQueue:
     """One worker thread draining a FIFO of callables or handler tasks."""
 
-    def __init__(
-        self, db_path: Path | str | None = None, keep: int = 40, workers: int = 1
-    ) -> None:
+    def __init__(self, db_path: Path | str | None = None, keep: int = 40, workers: int = 1) -> None:
         self._queue: queue.Queue[tuple[Job, Any]] = queue.Queue()
         self._jobs: dict[int, Job] = {}
         self._lock = threading.Lock()
