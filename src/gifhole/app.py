@@ -124,7 +124,7 @@ def create_app(
         log.warning("GIFHOLE_READ_TOKEN is redundant while reads are public")
     store = Store(root or default_root())
     store.rescan()
-    jobs = JobQueue()
+    jobs = JobQueue(db_path=store.root / "gifhole.db")
     bus = LogBus()
 
     # Preview/import staging. Cleared on start so it can't grow without bound.
@@ -250,6 +250,33 @@ def create_app(
                 return JSONResponse({"detail": "cross-origin request refused"}, status_code=403)
         return await call_next(request)
 
+    def handle_ocr(job, payload: dict) -> str:
+        gif_id = payload["gif_id"]
+        filename = payload["filename"]
+        bus.emit("ocr", f"reading text: {filename}")
+        result = ocr.read_gif_text(store.gifs_dir / filename)
+        if not result.available:
+            # Do NOT call set_ocr here. It stamps ocr_at, which would mark
+            # this GIF as read and exclude it from needing_ocr() forever,
+            # reporting a green job and "no text found" for what was a
+            # failure. Raising records the job as failed and leaves it
+            # eligible for a later Rescan.
+            bus.emit("ocr", f"failed: {filename}: {result.reason or 'unknown'}", level="error")
+            raise RuntimeError(f"OCR failed: {result.reason or 'unknown error'}")
+        store.set_ocr(gif_id, result.text)
+        # Log the text itself, not a count. When the scoreboard/HUD filter
+        # dropped something, show the raw read too, so the cleanup is
+        # visible (this is exactly where you want to see what it removed).
+        if result.text:
+            bus.emit("ocr", f"{filename}: “{_clip(result.text)}”")
+        else:
+            bus.emit("ocr", f"{filename}: no text")
+        if result.raw and result.raw != result.text:
+            bus.emit("ocr", f"{filename}: raw was “{_clip(result.raw)}”")
+        return result.text or "no text found"
+
+    jobs.register_handler("ocr", handle_ocr)
+
     def submit_ocr(gif_id: int, filename: str) -> bool:
         """Queue an OCR read, whatever the auto-OCR setting. Returns whether an
         engine was available to do it. This is the path an explicit re-read
@@ -258,36 +285,20 @@ def create_app(
         if not ocr.available():
             return False
 
-        def run(job):
-            bus.emit("ocr", f"reading text: {filename}")
-            result = ocr.read_gif_text(store.gifs_dir / filename)
-            if not result.available:
-                # Do NOT call set_ocr here. It stamps ocr_at, which would mark
-                # this GIF as read and exclude it from needing_ocr() forever,
-                # reporting a green job and "no text found" for what was a
-                # failure. Raising records the job as failed and leaves it
-                # eligible for a later Rescan.
-                bus.emit("ocr", f"failed: {filename}: {result.reason or 'unknown'}", level="error")
-                raise RuntimeError(f"OCR failed: {result.reason or 'unknown error'}")
-            store.set_ocr(gif_id, result.text)
-            # Log the text itself, not a count. When the scoreboard/HUD filter
-            # dropped something, show the raw read too, so the cleanup is
-            # visible (this is exactly where you want to see what it removed).
-            if result.text:
-                bus.emit("ocr", f"{filename}: “{_clip(result.text)}”")
-            else:
-                bus.emit("ocr", f"{filename}: no text")
-            if result.raw and result.raw != result.text:
-                bus.emit("ocr", f"{filename}: raw was “{_clip(result.raw)}”")
-            return result.text or "no text found"
-
-        jobs.submit("ocr", filename, run)
+        payload = {"gif_id": gif_id, "filename": filename}
+        jobs.submit("ocr", filename, lambda job: handle_ocr(job, payload), payload=payload)
         return True
 
     def queue_ocr(gif_id: int, filename: str) -> None:
         """Read burned-in text on add. Honours `auto_ocr`; failures never fatal."""
         if auto_ocr:
             submit_ocr(gif_id, filename)
+
+    def handle_dedupe(job, payload: dict) -> None:
+        store.backfill_hashes()
+        store.recompute_duplicate_count()
+
+    jobs.register_handler("dedupe", handle_dedupe)
 
     def ensure_dupe_scan() -> None:
         """Refresh the possible-duplicates count in the background when the
@@ -301,11 +312,12 @@ def create_app(
         if any(j.kind == "dedupe" and j.status in ("queued", "running") for j in jobs.list_jobs()):
             return
 
-        def run(job):
-            store.backfill_hashes()
-            store.recompute_duplicate_count()
-
-        jobs.submit("dedupe", "checking for duplicates", run)
+        jobs.submit(
+            "dedupe",
+            "checking for duplicates",
+            lambda job: handle_dedupe(job, {}),
+            payload={},
+        )
 
     # Backfill whatever was already sitting in the folder. Without this, GIFs
     # present before first launch stay unread until someone hits Rescan.
@@ -602,6 +614,38 @@ def create_app(
         media = "video/mp4" if fetch._classify(url) == "video" else "image/gif"
         return Response(content=data, media_type=media)
 
+    def handle_import(job, payload: dict) -> str:
+        urls = [u for u in (payload.get("urls") or []) if isinstance(u, str)]
+        titles = payload.get("titles") or {}
+        job.total = len(urls)
+        bus.emit("import", f"importing {len(urls)} selected")
+
+        def progress(finished, total, label):
+            job.done = finished
+            job.detail = label
+            # label is the added filename, or "" for a skip.
+            bus.emit("import", f"added {label}" if label else f"skipped {finished}/{total}")
+
+        report = fetch.import_urls(store, urls, staging_dir, titles, on_progress=progress)
+        job.done = len(urls)
+        job.detail = ""
+        # Previewing a large thread can stage hundreds of MB. The picker is
+        # closed by now and nothing else reads these, so drop them rather
+        # than letting staging grow for the rest of the session.
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        for name in report.added:
+            gif = next((g for g in store.list_gifs() if g.filename == name), None)
+            if gif:
+                queue_ocr(gif.id, gif.filename)
+        if not report.added:
+            first = report.skipped[0][1] if report.skipped else "nothing usable found"
+            bus.emit("import", first, level="error")
+            raise fetch.FetchError(first)
+        bus.emit("import", f"done: added {len(report.added)}, skipped {len(report.skipped)}")
+        return f"added {len(report.added)}, skipped {len(report.skipped)}"
+
+    jobs.register_handler("import", handle_import)
+
     @app.post("/api/fetch/import")
     def import_selected(payload: dict) -> JSONResponse:
         """Import exactly the candidates the user ticked."""
@@ -610,35 +654,13 @@ def create_app(
         if not urls:
             raise HTTPException(400, "nothing selected")
 
-        def run(job):
-            job.total = len(urls)
-            bus.emit("import", f"importing {len(urls)} selected")
-
-            def progress(finished, total, label):
-                job.done = finished
-                job.detail = label
-                # label is the added filename, or "" for a skip.
-                bus.emit("import", f"added {label}" if label else f"skipped {finished}/{total}")
-
-            report = fetch.import_urls(store, urls, staging_dir, titles, on_progress=progress)
-            job.done = len(urls)
-            job.detail = ""
-            # Previewing a large thread can stage hundreds of MB. The picker is
-            # closed by now and nothing else reads these, so drop them rather
-            # than letting staging grow for the rest of the session.
-            shutil.rmtree(staging_dir, ignore_errors=True)
-            for name in report.added:
-                gif = next((g for g in store.list_gifs() if g.filename == name), None)
-                if gif:
-                    queue_ocr(gif.id, gif.filename)
-            if not report.added:
-                first = report.skipped[0][1] if report.skipped else "nothing usable found"
-                bus.emit("import", first, level="error")
-                raise fetch.FetchError(first)
-            bus.emit("import", f"done: added {len(report.added)}, skipped {len(report.skipped)}")
-            return f"added {len(report.added)}, skipped {len(report.skipped)}"
-
-        job = jobs.submit("import", f"{len(urls)} selected", run)
+        job_payload = {"urls": urls, "titles": titles}
+        job = jobs.submit(
+            "import",
+            f"{len(urls)} selected",
+            lambda j: handle_import(j, job_payload),
+            payload=job_payload,
+        )
         return JSONResponse(job.as_dict(), status_code=202)
 
     # -- metadata ------------------------------------------------------------
@@ -706,6 +728,55 @@ def create_app(
     # that cannot succeed. Any later success clears it.
     auth_block: dict[str, str | None] = {"why": None}
 
+    def handle_describe(job, payload: dict) -> str:
+        from gifhole import enrich
+
+        gif_id = payload["gif_id"]
+        filename = payload.get("filename") or ""
+        chosen = payload.get("model") or enrich.default_model()
+        gif = store.get(gif_id)
+        if not gif:
+            return "gif no longer exists"
+        if not filename:
+            filename = gif.filename
+
+        if auth_block["why"]:
+            raise enrich.EnrichError(auth_block["why"])
+        vocabulary = [tag for tag, _ in store.all_tags()]
+        bus.emit("describe", f"{filename}: asking {chosen}")
+        try:
+            result = enrich.describe_gif(
+                store.gifs_dir / filename, vocabulary=vocabulary, model=chosen
+            )
+        except enrich.EnrichError as exc:
+            if any(w in str(exc).lower() for w in ("authentication", "api_key", "api key")):
+                auth_block["why"] = (
+                    "no valid API key. Set GEMINI_API_KEY or ANTHROPIC_API_KEY, then try again"
+                )
+            bus.emit("describe", f"failed: {filename}: {exc}", level="error")
+            raise
+        auth_block["why"] = None
+        before = set(store.get(gif.id).tags if store.get(gif.id) else [])
+        store.set_enrichment(gif.id, result["description"], " ".join(result["tags"]))
+        after = store.get(gif.id)
+        added = [t for t in (after.tags if after else []) if t not in before]
+        desc = result["description"]
+        bus.emit(
+            "describe",
+            f"{filename}: “{_clip(desc)}”" if desc else f"{filename}: no description",
+        )
+        bus.emit(
+            "describe",
+            f"{filename}: {('tagged ' + ', '.join(added)) if added else 'no new tags'}",
+        )
+        # Say what changed. A constrained vocabulary often picks tags the
+        # GIF already had, which is correct but looks like nothing
+        # happened unless the job says so.
+        note = f"+{len(added)} tags: {' '.join(added)}" if added else "no new tags"
+        return f"{note} · {result['description'][:60]}"
+
+    jobs.register_handler("describe", handle_describe)
+
     def queue_enrich(gif, model: str | None = None) -> None:
         """Describe one GIF in the background, tagged from the live vocabulary.
 
@@ -716,44 +787,13 @@ def create_app(
         from gifhole import enrich
 
         chosen = model or enrich.default_model()
-
-        def run(job):
-            if auth_block["why"]:
-                raise enrich.EnrichError(auth_block["why"])
-            vocabulary = [tag for tag, _ in store.all_tags()]
-            bus.emit("describe", f"{gif.filename}: asking {chosen}")
-            try:
-                result = enrich.describe_gif(
-                    store.gifs_dir / gif.filename, vocabulary=vocabulary, model=chosen
-                )
-            except enrich.EnrichError as exc:
-                if any(w in str(exc).lower() for w in ("authentication", "api_key", "api key")):
-                    auth_block["why"] = (
-                        "no valid API key. Set GEMINI_API_KEY or ANTHROPIC_API_KEY, then try again"
-                    )
-                bus.emit("describe", f"failed: {gif.filename}: {exc}", level="error")
-                raise
-            auth_block["why"] = None
-            before = set(store.get(gif.id).tags if store.get(gif.id) else [])
-            store.set_enrichment(gif.id, result["description"], " ".join(result["tags"]))
-            after = store.get(gif.id)
-            added = [t for t in (after.tags if after else []) if t not in before]
-            desc = result["description"]
-            bus.emit(
-                "describe",
-                f"{gif.filename}: “{_clip(desc)}”" if desc else f"{gif.filename}: no description",
-            )
-            bus.emit(
-                "describe",
-                f"{gif.filename}: {('tagged ' + ', '.join(added)) if added else 'no new tags'}",
-            )
-            # Say what changed. A constrained vocabulary often picks tags the
-            # GIF already had, which is correct but looks like nothing
-            # happened unless the job says so.
-            note = f"+{len(added)} tags: {' '.join(added)}" if added else "no new tags"
-            return f"{note} · {result['description'][:60]}"
-
-        jobs.submit("describe", gif.filename, run)
+        payload = {"gif_id": gif.id, "filename": gif.filename, "model": chosen}
+        jobs.submit(
+            "describe",
+            gif.filename,
+            lambda job: handle_describe(job, payload),
+            payload=payload,
+        )
 
     def resolve_model(requested) -> str | None:
         """Validate a picker choice against what the account actually has, so a

@@ -6,6 +6,7 @@ text through the store, which is the contract the rest of the app relies on.
 
 import io
 import pathlib
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -167,6 +168,78 @@ def test_active_count_drops_to_zero():
     q.submit("test", "slow", lambda job: time.sleep(0.05))
     assert q.wait_idle()
     assert q.active() == 0
+
+
+def test_job_queue_persistence_and_recovery(tmp_path):
+    db_file = tmp_path / "test_jobs.db"
+    q1 = JobQueue(db_path=db_file)
+    blocker_started = threading.Event()
+    release_blocker = threading.Event()
+    q1.submit("echo", "blocker", lambda job: blocker_started.set() or release_blocker.wait(5))
+    assert blocker_started.wait(5)
+
+    q1.submit("echo", "item1", payload={"msg": "hello persistence"})
+    release_blocker.set()
+    q1.close()
+
+    executed = []
+    q2 = JobQueue(db_path=db_file)
+    q2.register_handler("echo", lambda job, payload: executed.append(payload.get("msg")) or "ok")
+    assert q2.wait_idle(5)
+    assert "hello persistence" in executed
+    q2.close()
+
+
+def test_job_queue_recovers_interrupted_running_job(tmp_path):
+    db_file = tmp_path / "test_jobs.db"
+    con = sqlite3.connect(db_file)
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS job_queue ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "kind TEXT NOT NULL, "
+        "label TEXT NOT NULL, "
+        "payload TEXT NOT NULL DEFAULT '{}', "
+        "status TEXT NOT NULL DEFAULT 'queued', "
+        "detail TEXT NOT NULL DEFAULT '', "
+        "done INTEGER NOT NULL DEFAULT 0, "
+        "total INTEGER NOT NULL DEFAULT 0, "
+        "created_at REAL NOT NULL)"
+    )
+    con.execute(
+        "INSERT INTO job_queue (kind, label, payload, status, detail, done, total, created_at) "
+        "VALUES ('retry_me', 'job1', '{\"val\": 42}', 'running', '', 0, 0, 1000.0)"
+    )
+    con.commit()
+    con.close()
+
+    results = []
+    q = JobQueue(db_path=db_file)
+    q.register_handler("retry_me", lambda job, payload: results.append(payload["val"]) or "done")
+    assert q.wait_idle(5)
+    assert results == [42]
+    assert q.list_jobs()[0].status == "done"
+    q.close()
+
+
+def test_job_queue_persistence_cancel_and_prune(tmp_path):
+    db_file = tmp_path / "test_jobs.db"
+    q = JobQueue(db_path=db_file, keep=3)
+    blocker = threading.Event()
+    release = threading.Event()
+    q.submit("work", "b", lambda job: blocker.set() or release.wait(5))
+    assert blocker.wait(5)
+
+    q.submit("work", "c1", payload={"id": 1})
+    q.submit("work", "c2", payload={"id": 2})
+    assert q.cancel("work") == 2
+    release.set()
+    assert q.wait_idle(5)
+
+    con = sqlite3.connect(db_file)
+    rows = con.execute("SELECT * FROM job_queue WHERE status = 'cancelled'").fetchall()
+    assert len(rows) == 2
+    con.close()
+    q.close()
 
 
 def test_failed_ocr_is_recorded_as_a_failure_not_as_empty_text(tmp_path, monkeypatch):
@@ -1029,3 +1102,42 @@ def test_a_long_word_anchors_a_line_that_also_has_numbers():
 
     assert _looks_like_caption("OVER 9000")
     assert _looks_like_caption("you had ONE job")
+
+
+def test_app_recovers_queued_describe_across_restart(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from gifhole.app import create_app
+    from tests.conftest import make_gif
+
+    gifs_dir = tmp_path / "gifs"
+    gifs_dir.mkdir()
+    (gifs_dir / "sample.gif").write_bytes(make_gif())
+
+    described = []
+
+    def mock_describe(path, vocabulary=None, model=None):
+        described.append(path.name)
+        return {"description": "mocked description", "tags": ["funny", "cat"]}
+
+    monkeypatch.setattr("gifhole.enrich.describe_gif", mock_describe)
+    monkeypatch.setattr("gifhole.enrich.available", lambda: (True, ""))
+    monkeypatch.setattr(
+        "gifhole.enrich.list_models", lambda: [{"id": "mock-model", "name": "mock"}]
+    )
+    monkeypatch.setattr("gifhole.enrich.default_model", lambda: "mock-model")
+
+    app1 = create_app(root=tmp_path)
+    client1 = TestClient(app1)
+    res = client1.post("/api/gifs/describe", json={"scope": "all"})
+    assert res.status_code == 202
+    app1.state.jobs.close()
+
+    app2 = create_app(root=tmp_path)
+    assert app2.state.jobs.wait_idle(5)
+    app2.state.jobs.close()
+
+    assert described == ["sample.gif"]
+    gif = app2.state.store.list_gifs()[0]
+    assert gif.description == "mocked description"
+    assert "funny" in gif.tags

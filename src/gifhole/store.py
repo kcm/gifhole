@@ -42,6 +42,17 @@ CREATE TABLE IF NOT EXISTS confuser_hashes (
     hit_count  INTEGER NOT NULL DEFAULT 1,
     updated_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS job_queue (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,
+    label      TEXT NOT NULL,
+    payload    TEXT NOT NULL DEFAULT '{}',
+    status     TEXT NOT NULL DEFAULT 'queued',
+    detail     TEXT NOT NULL DEFAULT '',
+    done       INTEGER NOT NULL DEFAULT 0,
+    total      INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
 """
 
 # Columns added after the first release. Applied to existing databases on open
@@ -215,6 +226,18 @@ class Store:
                 "phash_val TEXT PRIMARY KEY, "
                 "hit_count INTEGER NOT NULL DEFAULT 1, "
                 "updated_at REAL NOT NULL)"
+            )
+            self.db.execute(
+                "CREATE TABLE IF NOT EXISTS job_queue ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "kind TEXT NOT NULL, "
+                "label TEXT NOT NULL, "
+                "payload TEXT NOT NULL DEFAULT '{}', "
+                "status TEXT NOT NULL DEFAULT 'queued', "
+                "detail TEXT NOT NULL DEFAULT '', "
+                "done INTEGER NOT NULL DEFAULT 0, "
+                "total INTEGER NOT NULL DEFAULT 0, "
+                "created_at REAL NOT NULL)"
             )
 
     # -- reads ---------------------------------------------------------------
