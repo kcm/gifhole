@@ -6,6 +6,7 @@ import logging
 import os
 import secrets
 import shutil
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
@@ -124,7 +125,7 @@ def create_app(
         log.warning("GIFHOLE_READ_TOKEN is redundant while reads are public")
     store = Store(root or default_root())
     store.rescan()
-    jobs = JobQueue(db_path=store.root / "gifhole.db")
+    jobs = JobQueue(db_path=store.root / "gifhole.db", workers=4)
     bus = LogBus()
 
     # Preview/import staging. Cleared on start so it can't grow without bound.
@@ -250,30 +251,33 @@ def create_app(
                 return JSONResponse({"detail": "cross-origin request refused"}, status_code=403)
         return await call_next(request)
 
+    ocr_semaphore = threading.Semaphore(1)
+
     def handle_ocr(job, payload: dict) -> str:
-        gif_id = payload["gif_id"]
-        filename = payload["filename"]
-        bus.emit("ocr", f"reading text: {filename}")
-        result = ocr.read_gif_text(store.gifs_dir / filename)
-        if not result.available:
-            # Do NOT call set_ocr here. It stamps ocr_at, which would mark
-            # this GIF as read and exclude it from needing_ocr() forever,
-            # reporting a green job and "no text found" for what was a
-            # failure. Raising records the job as failed and leaves it
-            # eligible for a later Rescan.
-            bus.emit("ocr", f"failed: {filename}: {result.reason or 'unknown'}", level="error")
-            raise RuntimeError(f"OCR failed: {result.reason or 'unknown error'}")
-        store.set_ocr(gif_id, result.text)
-        # Log the text itself, not a count. When the scoreboard/HUD filter
-        # dropped something, show the raw read too, so the cleanup is
-        # visible (this is exactly where you want to see what it removed).
-        if result.text:
-            bus.emit("ocr", f"{filename}: “{_clip(result.text)}”")
-        else:
-            bus.emit("ocr", f"{filename}: no text")
-        if result.raw and result.raw != result.text:
-            bus.emit("ocr", f"{filename}: raw was “{_clip(result.raw)}”")
-        return result.text or "no text found"
+        with ocr_semaphore:
+            gif_id = payload["gif_id"]
+            filename = payload["filename"]
+            bus.emit("ocr", f"reading text: {filename}")
+            result = ocr.read_gif_text(store.gifs_dir / filename)
+            if not result.available:
+                # Do NOT call set_ocr here. It stamps ocr_at, which would mark
+                # this GIF as read and exclude it from needing_ocr() forever,
+                # reporting a green job and "no text found" for what was a
+                # failure. Raising records the job as failed and leaves it
+                # eligible for a later Rescan.
+                bus.emit("ocr", f"failed: {filename}: {result.reason or 'unknown'}", level="error")
+                raise RuntimeError(f"OCR failed: {result.reason or 'unknown error'}")
+            store.set_ocr(gif_id, result.text)
+            # Log the text itself, not a count. When the scoreboard/HUD filter
+            # dropped something, show the raw read too, so the cleanup is
+            # visible (this is exactly where you want to see what it removed).
+            if result.text:
+                bus.emit("ocr", f"{filename}: “{_clip(result.text)}”")
+            else:
+                bus.emit("ocr", f"{filename}: no text")
+            if result.raw and result.raw != result.text:
+                bus.emit("ocr", f"{filename}: raw was “{_clip(result.raw)}”")
+            return result.text or "no text found"
 
     jobs.register_handler("ocr", handle_ocr)
 
@@ -294,9 +298,12 @@ def create_app(
         if auto_ocr:
             submit_ocr(gif_id, filename)
 
+    dedupe_semaphore = threading.Semaphore(1)
+
     def handle_dedupe(job, payload: dict) -> None:
-        store.backfill_hashes()
-        store.recompute_duplicate_count()
+        with dedupe_semaphore:
+            store.backfill_hashes()
+            store.recompute_duplicate_count()
 
     jobs.register_handler("dedupe", handle_dedupe)
 

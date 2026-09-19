@@ -47,7 +47,9 @@ class Job:
 class JobQueue:
     """One worker thread draining a FIFO of callables or handler tasks."""
 
-    def __init__(self, db_path: Path | str | None = None, keep: int = 40) -> None:
+    def __init__(
+        self, db_path: Path | str | None = None, keep: int = 40, workers: int = 1
+    ) -> None:
         self._queue: queue.Queue[tuple[Job, Any]] = queue.Queue()
         self._jobs: dict[int, Job] = {}
         self._lock = threading.Lock()
@@ -58,8 +60,12 @@ class JobQueue:
         self._stopped = False
         if self._db_path:
             self._init_db()
-        self._worker = threading.Thread(target=self._run, daemon=True, name="gifhole-jobs")
-        self._worker.start()
+        self._workers = [
+            threading.Thread(target=self._run, daemon=True, name=f"gifhole-jobs-{i}")
+            for i in range(max(1, workers))
+        ]
+        for w in self._workers:
+            w.start()
 
     def _init_db(self) -> None:
         assert self._db_path is not None
@@ -291,8 +297,9 @@ class JobQueue:
 
     def close(self) -> None:
         self._stopped = True
-        if self._worker.is_alive():
-            self._worker.join(timeout=1.0)
+        for w in self._workers:
+            if w.is_alive():
+                w.join(timeout=1.0)
         with self._lock:
             if self._db:
                 self._db.close()

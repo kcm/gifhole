@@ -242,6 +242,25 @@ def test_job_queue_persistence_cancel_and_prune(tmp_path):
     q.close()
 
 
+def test_job_queue_runs_workers_in_parallel():
+    q = JobQueue(workers=3)
+    barrier = threading.Barrier(3)
+    started = []
+
+    def work(job):
+        started.append(time.time())
+        barrier.wait(timeout=2.0)
+        return "ok"
+
+    for i in range(3):
+        q.submit("parallel", f"job-{i}", work)
+
+    assert q.wait_idle(3.0)
+    assert len(started) == 3
+    assert max(started) - min(started) < 1.0
+    q.close()
+
+
 def test_failed_ocr_is_recorded_as_a_failure_not_as_empty_text(tmp_path, monkeypatch):
     """A failed read must not stamp ocr_at, or the GIF is never retried."""
     from fastapi.testclient import TestClient
