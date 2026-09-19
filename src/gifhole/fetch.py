@@ -74,6 +74,8 @@ class FetchReport:
 
 # Carrier-grade NAT, which `ipaddress` does not report as private.
 _CGNAT = ipaddress.ip_network("100.64.0.0/10")
+# RFC 1122 'This host on this network', resolves to loopback on many OSes.
+_ZERO_NET = ipaddress.ip_network("0.0.0.0/8")
 
 
 def _is_forbidden(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -86,7 +88,7 @@ def _is_forbidden(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
         or ip.is_reserved
         or ip.is_multicast
         or ip.is_unspecified
-        or (ip.version == 4 and ip in _CGNAT)
+        or (ip.version == 4 and (ip in _CGNAT or ip in _ZERO_NET))
     )
 
 

@@ -35,4 +35,4 @@ EXPOSE 8777
 # container's network namespace is the boundary, and what is actually exposed
 # is decided by the port mapping. Publish it as 127.0.0.1:8777:8777 to keep it
 # on the host's loopback, which is what the compose file does.
-CMD ["uv", "run", "gifhole", "--host", "0.0.0.0", "--port", "8777", "--no-open"]
+CMD ["uv", "run", "gifhole", "--host", "0.0.0.0", "--port", "8777", "--no-open", "--insecure"]

@@ -17,11 +17,20 @@ from PIL import Image, ImageSequence
 MIN_OCR_EDGE = 800
 MAX_FRAME_EDGE = 1400
 
+# Prevent decompression bomb denial-of-service
+Image.MAX_IMAGE_PIXELS = 25_000_000
+MAX_SAFE_PIXELS = 25_000_000
+MAX_SAFE_DIM = 10_000
+MAX_SAFE_FRAMES = 5000
+
 
 def sample_frames(path: Path, count: int = 3) -> list[Image.Image]:
     """Return up to `count` RGB frames spread evenly across the animation."""
     with Image.open(path) as img:
-        total = getattr(img, "n_frames", 1)
+        w, h = img.size
+        if w * h > MAX_SAFE_PIXELS or w > MAX_SAFE_DIM or h > MAX_SAFE_DIM:
+            raise ValueError(f"image dimensions ({w}x{h}) exceed safe limits")
+        total = min(getattr(img, "n_frames", 1), MAX_SAFE_FRAMES)
         if total <= 1:
             return [img.convert("RGB")]
         # Spread across the whole animation, from just after the start to the

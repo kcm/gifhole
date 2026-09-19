@@ -23,6 +23,15 @@ const chosenModel = () => localStorage.getItem(MODEL_KEY) || "";
 const describeUndo = new Map();
 let capabilities = { ocr: false, enrich: false, ffmpeg: false };
 
+function handleTokenParam() {
+  const url = new URL(window.location.href);
+  if (url.searchParams.has("token")) {
+    url.searchParams.delete("token");
+    window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+  }
+}
+handleTokenParam();
+
 // ---------------------------------------------------------------- clipboard
 
 // A copy puts two flavours on the clipboard: text/html referencing the GIF,

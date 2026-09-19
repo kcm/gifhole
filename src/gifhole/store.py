@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import shutil
 import sqlite3
+import threading
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -27,7 +28,19 @@ CREATE TABLE IF NOT EXISTS gifs (
     height    INTEGER NOT NULL DEFAULT 0,
     bytes     INTEGER NOT NULL DEFAULT 0,
     added_at  REAL NOT NULL DEFAULT 0,
-    copies    INTEGER NOT NULL DEFAULT 0
+    copies    INTEGER NOT NULL DEFAULT 0,
+    favorite  INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS dismissed_duplicates (
+    gif1_id    INTEGER NOT NULL,
+    gif2_id    INTEGER NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (gif1_id, gif2_id)
+);
+CREATE TABLE IF NOT EXISTS confuser_hashes (
+    phash_val  TEXT PRIMARY KEY,
+    hit_count  INTEGER NOT NULL DEFAULT 1,
+    updated_at REAL NOT NULL
 );
 """
 
@@ -43,6 +56,7 @@ MIGRATIONS = {
     # hashes of several frames (phash) so re-encodes at different lengths match.
     "sha256": "TEXT NOT NULL DEFAULT ''",
     "phash": "TEXT NOT NULL DEFAULT ''",
+    "favorite": "INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -70,6 +84,7 @@ class Gif:
     enriched_at: float = 0.0
     sha256: str = ""
     phash: str = ""
+    favorite: int = 0
 
     def as_dict(self) -> dict:
         return {**self.__dict__, "url": f"/gifs/{self.filename}"}
@@ -79,10 +94,11 @@ def gif_dimensions(data: bytes) -> tuple[int, int]:
     """Read the logical screen size from a GIF header (bytes 6-9, little endian)."""
     if len(data) < 10 or not data.startswith((b"GIF87a", b"GIF89a")):
         return (0, 0)
-    return (
-        int.from_bytes(data[6:8], "little"),
-        int.from_bytes(data[8:10], "little"),
-    )
+    w = int.from_bytes(data[6:8], "little")
+    h = int.from_bytes(data[8:10], "little")
+    if w * h > 25_000_000 or w > 10000 or h > 10000:
+        raise ValueError(f"GIF dimensions ({w}x{h}) exceed safe limits")
+    return (w, h)
 
 
 def safe_filename(name: str) -> str:
@@ -103,6 +119,9 @@ FILTERS = {
     "untitled": lambda gif: not gif.title.strip(),
     # Never once copied: the prune shortlist. Search "unused" to review them.
     "unused": lambda gif: gif.copies == 0,
+    "favorite": lambda gif: bool(gif.favorite),
+    "favorites": lambda gif: bool(gif.favorite),
+    "starred": lambda gif: bool(gif.favorite),
 }
 
 
@@ -158,11 +177,17 @@ class Store:
         self.gifs_dir = self.root / "gifs"
         self.trash_dir = self.root / ".trash"
         self.gifs_dir.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.root / "gifhole.db", check_same_thread=False)
-        self.db.row_factory = sqlite3.Row
-        self.db.executescript(SCHEMA)
-        self._migrate()
-        self.db.commit()
+        self._lock = threading.RLock()
+        with self._lock:
+            self.db = sqlite3.connect(
+                self.root / "gifhole.db", check_same_thread=False, timeout=30.0
+            )
+            self.db.row_factory = sqlite3.Row
+            self.db.execute("PRAGMA journal_mode = WAL")
+            self.db.execute("PRAGMA busy_timeout = 5000")
+            self.db.executescript(SCHEMA)
+            self._migrate()
+            self.db.commit()
         # Cache for the ambient "possible dupes" count. The scan is O(n^2) and
         # too slow for the request thread, so it runs in a background job and
         # the result is cached. Invalidation is keyed on `library_signature()`,
@@ -173,10 +198,24 @@ class Store:
         self._dup_signature: tuple | None = None
 
     def _migrate(self) -> None:
-        existing = {row["name"] for row in self.db.execute("PRAGMA table_info(gifs)")}
-        for column, spec in MIGRATIONS.items():
-            if column not in existing:
-                self.db.execute(f"ALTER TABLE gifs ADD COLUMN {column} {spec}")  # noqa: S608
+        with self._lock:
+            existing = {row["name"] for row in self.db.execute("PRAGMA table_info(gifs)")}
+            for column, spec in MIGRATIONS.items():
+                if column not in existing:
+                    self.db.execute(f"ALTER TABLE gifs ADD COLUMN {column} {spec}")  # noqa: S608
+            self.db.execute(
+                "CREATE TABLE IF NOT EXISTS dismissed_duplicates ("
+                "gif1_id INTEGER NOT NULL, "
+                "gif2_id INTEGER NOT NULL, "
+                "created_at REAL NOT NULL, "
+                "PRIMARY KEY (gif1_id, gif2_id))"
+            )
+            self.db.execute(
+                "CREATE TABLE IF NOT EXISTS confuser_hashes ("
+                "phash_val TEXT PRIMARY KEY, "
+                "hit_count INTEGER NOT NULL DEFAULT 1, "
+                "updated_at REAL NOT NULL)"
+            )
 
     # -- reads ---------------------------------------------------------------
 
@@ -198,6 +237,7 @@ class Store:
             enriched_at=row["enriched_at"],
             sha256=row["sha256"],
             phash=row["phash"],
+            favorite=row["favorite"],
         )
 
     def list_gifs(self, query: str = "", sort: str = "added") -> list[Gif]:
@@ -205,9 +245,11 @@ class Store:
             "added": "added_at DESC",
             "name": "COALESCE(NULLIF(title, ''), filename) COLLATE NOCASE ASC",
             "copies": "copies DESC, added_at DESC",
+            "favorite": "favorite DESC, added_at DESC",
         }.get(sort, "added_at DESC")
-        rows = self.db.execute(f"SELECT * FROM gifs ORDER BY {order}").fetchall()  # noqa: S608
-        gifs = [self._row_to_gif(r) for r in rows]
+        with self._lock:
+            rows = self.db.execute(f"SELECT * FROM gifs ORDER BY {order}").fetchall()  # noqa: S608
+            gifs = [self._row_to_gif(r) for r in rows]
         terms = split_tags(query)
         if not terms:
             return gifs
@@ -218,12 +260,15 @@ class Store:
         return [g for g in gifs if all(c(g) for c in checks) and _matches(g, words)]
 
     def get(self, gif_id: int) -> Gif | None:
-        row = self.db.execute("SELECT * FROM gifs WHERE id = ?", (gif_id,)).fetchone()
-        return self._row_to_gif(row) if row else None
+        with self._lock:
+            row = self.db.execute("SELECT * FROM gifs WHERE id = ?", (gif_id,)).fetchone()
+            return self._row_to_gif(row) if row else None
 
     def all_tags(self) -> list[tuple[str, int]]:
         counts: dict[str, int] = {}
-        for row in self.db.execute("SELECT tags FROM gifs"):
+        with self._lock:
+            rows = self.db.execute("SELECT tags FROM gifs").fetchall()
+        for row in rows:
             for tag in split_tags(row["tags"]):
                 counts[tag] = counts.get(tag, 0) + 1
         return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
@@ -261,24 +306,26 @@ class Store:
             size = len(data)
         sha = dedupe.content_hash(data if data is not None else path.read_bytes())
         phash = dedupe.perceptual_hash(path)
-        cur = self.db.execute(
-            """INSERT INTO gifs
-                   (filename, title, tags, width, height, bytes, added_at, source_url,
-                    sha256, phash)
-               VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(filename) DO UPDATE SET width=excluded.width,
-                   height=excluded.height, bytes=excluded.bytes,
-                   sha256=excluded.sha256, phash=excluded.phash""",
-            (path.name, tags, width, height, size, time.time(), source_url, sha, phash),
-        )
-        self.db.commit()
-        gif_id = (
-            cur.lastrowid
-            or self.db.execute("SELECT id FROM gifs WHERE filename = ?", (path.name,)).fetchone()[
-                "id"
-            ]
-        )
-        gif = self.get(gif_id)
+        with self._lock:
+            cur = self.db.execute(
+                """INSERT INTO gifs
+                       (filename, title, tags, width, height, bytes, added_at, source_url,
+                        sha256, phash)
+                   VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(filename) DO UPDATE SET width=excluded.width,
+                       height=excluded.height, bytes=excluded.bytes,
+                       sha256=excluded.sha256, phash=excluded.phash""",
+                (path.name, tags, width, height, size, time.time(), source_url, sha, phash),
+            )
+            self.db.commit()
+            if cur.lastrowid:
+                gif_id = cur.lastrowid
+            else:
+                row = self.db.execute(
+                    "SELECT id FROM gifs WHERE filename = ?", (path.name,)
+                ).fetchone()
+                gif_id = row["id"]
+            gif = self.get(gif_id)
         assert gif is not None
         return gif
 
@@ -289,29 +336,36 @@ class Store:
         title: str | None = None,
         tags: str | None = None,
         description: str | None = None,
+        favorite: bool | int | None = None,
     ) -> Gif | None:
-        if title is not None:
-            self.db.execute("UPDATE gifs SET title = ? WHERE id = ?", (title.strip(), gif_id))
-        if description is not None:
-            # Editing by hand does not stamp enriched_at: that marks "Claude has
-            # seen this", and a batch describe should still skip it afterwards
-            # only if Claude actually did.
-            self.db.execute(
-                "UPDATE gifs SET description = ? WHERE id = ?", (description.strip(), gif_id)
-            )
-        if tags is not None:
-            self.db.execute(
-                "UPDATE gifs SET tags = ? WHERE id = ?", (" ".join(split_tags(tags)), gif_id)
-            )
-        self.db.commit()
-        return self.get(gif_id)
+        with self._lock:
+            if title is not None:
+                self.db.execute("UPDATE gifs SET title = ? WHERE id = ?", (title.strip(), gif_id))
+            if description is not None:
+                # Editing by hand does not stamp enriched_at: that marks "Claude has
+                # seen this", and a batch describe should still skip it afterwards
+                # only if Claude actually did.
+                self.db.execute(
+                    "UPDATE gifs SET description = ? WHERE id = ?", (description.strip(), gif_id)
+                )
+            if tags is not None:
+                self.db.execute(
+                    "UPDATE gifs SET tags = ? WHERE id = ?", (" ".join(split_tags(tags)), gif_id)
+                )
+            if favorite is not None:
+                self.db.execute(
+                    "UPDATE gifs SET favorite = ? WHERE id = ?", (1 if favorite else 0, gif_id)
+                )
+            self.db.commit()
+            return self.get(gif_id)
 
     def set_ocr(self, gif_id: int, text: str) -> None:
-        self.db.execute(
-            "UPDATE gifs SET ocr_text = ?, ocr_at = ? WHERE id = ?",
-            (text, time.time(), gif_id),
-        )
-        self.db.commit()
+        with self._lock:
+            self.db.execute(
+                "UPDATE gifs SET ocr_text = ?, ocr_at = ? WHERE id = ?",
+                (text, time.time(), gif_id),
+            )
+            self.db.commit()
 
     def set_enrichment(self, gif_id: int, description: str, tags: str = "") -> None:
         """Store a Claude description and tags: the description replaces what
@@ -321,17 +375,70 @@ class Store:
         hand, so describe adds to them and never removes, matching the
         bulk-tag rule. The UI still snapshots both first and offers a one-step
         undo, so a describe you did not want can be taken back whole."""
-        gif = self.get(gif_id)
-        if gif is None:
-            return
-        merged = list(dict.fromkeys(gif.tags + split_tags(tags)))
-        self.db.execute(
-            "UPDATE gifs SET description = ?, tags = ?, enriched_at = ? WHERE id = ?",
-            (description.strip(), " ".join(merged), time.time(), gif_id),
-        )
-        self.db.commit()
+        with self._lock:
+            gif = self.get(gif_id)
+            if gif is None:
+                return
+            merged = list(dict.fromkeys(gif.tags + split_tags(tags)))
+            self.db.execute(
+                "UPDATE gifs SET description = ?, tags = ?, enriched_at = ? WHERE id = ?",
+                (description.strip(), " ".join(merged), time.time(), gif_id),
+            )
+            self.db.commit()
 
-    def find_duplicates(self, data: bytes, path: Path | None = None) -> list[tuple[Gif, str]]:
+    def get_dismissed_duplicate_pairs(self) -> set[tuple[int, int]]:
+        with self._lock:
+            rows = self.db.execute("SELECT gif1_id, gif2_id FROM dismissed_duplicates").fetchall()
+            return {(r["gif1_id"], r["gif2_id"]) for r in rows}
+
+    def get_confuser_hashes(self, min_hits: int = 1) -> set[int]:
+        with self._lock:
+            rows = self.db.execute(
+                "SELECT phash_val FROM confuser_hashes WHERE hit_count >= ?", (min_hits,)
+            ).fetchall()
+            return {int(r["phash_val"], 16) for r in rows if r["phash_val"]}
+
+    def dismiss_duplicates(self, gif_ids: list[int]) -> int:
+        """Mark a set of GIF ids as not duplicates of one another.
+
+        Feeds back matching frame hashes into confuser_hashes to prevent
+        similar false matches across other GIFs in the library.
+        """
+        if len(gif_ids) < 2:
+            return 0
+        gifs = [self.get(gid) for gid in gif_ids]
+        valid_gifs = [g for g in gifs if g is not None]
+        now = time.time()
+        dismissed_count = 0
+
+        with self._lock:
+            for i, ga in enumerate(valid_gifs):
+                for gb in valid_gifs[i + 1 :]:
+                    low_id, high_id = min(ga.id, gb.id), max(ga.id, gb.id)
+                    self.db.execute(
+                        "INSERT OR IGNORE INTO dismissed_duplicates (gif1_id, gif2_id, created_at) "
+                        "VALUES (?, ?, ?)",
+                        (low_id, high_id, now),
+                    )
+                    dismissed_count += 1
+
+                    # Feedback loop: find which frames matched and record as confusers
+                    if ga.phash and gb.phash:
+                        matched = dedupe.matching_frame_hashes(ga.phash, gb.phash)
+                        for h_val in matched:
+                            self.db.execute(
+                                "INSERT INTO confuser_hashes (phash_val, hit_count, updated_at) "
+                                "VALUES (?, 1, ?) "
+                                "ON CONFLICT(phash_val) DO UPDATE SET "
+                                "hit_count = hit_count + 1, updated_at = excluded.updated_at",
+                                (h_val, now),
+                            )
+            self.db.commit()
+        return dismissed_count
+
+    def find_duplicates(
+        self, data: bytes, path: Path | None = None, candidate_id: int | None = None
+    ) -> list[tuple[Gif, str]]:
         """What already in the library looks like this GIF.
 
         Returns (gif, "exact" | "near"), exact first. Nothing is decided here:
@@ -359,9 +466,12 @@ class Store:
         # otherwise keep missing re-encodes the new one catches. instr(...)=0
         # matches both empty and single-hash; a legit one-frame GIF gets
         # re-hashed on each run, which is cheap and rare.
-        rows = self.db.execute(
-            "SELECT id, filename FROM gifs WHERE sha256 = '' OR phash = '' OR instr(phash, ' ') = 0"
-        ).fetchall()
+        with self._lock:
+            sql = (
+                "SELECT id, filename FROM gifs "
+                "WHERE sha256 = '' OR phash = '' OR instr(phash, ' ') = 0"
+            )
+            rows = self.db.execute(sql).fetchall()
         done = 0
         for row in rows[:limit] if limit else rows:
             path = self.gifs_dir / row["filename"]
@@ -371,20 +481,18 @@ class Store:
                 sha = dedupe.content_hash(path.read_bytes())
             except OSError:
                 continue
-            self.db.execute(
-                "UPDATE gifs SET sha256 = ?, phash = ? WHERE id = ?",
-                (sha, dedupe.perceptual_hash(path), row["id"]),
-            )
+            with self._lock:
+                self.db.execute(
+                    "UPDATE gifs SET sha256 = ?, phash = ? WHERE id = ?",
+                    (sha, dedupe.perceptual_hash(path), row["id"]),
+                )
+                self.db.commit()
             done += 1
-        self.db.commit()
         return done
 
     def duplicate_groups(self) -> list[list[Gif]]:
         """Duplicates already sitting in the library, grouped."""
         gifs = [g for g in self.list_gifs() if g.sha256 or g.phash]
-        # Parse each phash into int frame hashes once, up front, rather than
-        # re-parsing hex inside the O(n^2) comparison. This is the difference
-        # between a scan that is slow and one that is not.
         frames = {g.id: dedupe.frame_ints(g.phash) for g in gifs}
         seen: set[int] = set()
         groups = []
@@ -411,10 +519,11 @@ class Store:
         changes on any add, remove, or re-hash. The duplicate-count cache is
         keyed on this, so it is stale exactly when the data it summarises is,
         with no per-mutation bookkeeping to forget."""
-        row = self.db.execute(
-            "SELECT COUNT(*), COALESCE(SUM(id), 0), COALESCE(SUM(LENGTH(phash)), 0) FROM gifs"
-        ).fetchone()
-        return tuple(row)
+        with self._lock:
+            row = self.db.execute(
+                "SELECT COUNT(*), COALESCE(SUM(id), 0), COALESCE(SUM(LENGTH(phash)), 0) FROM gifs"
+            ).fetchone()
+            return tuple(row)
 
     # What a library-wide job should touch. Named rather than boolean flags so
     # the UI can show a count for exactly what it is about to spend money on.
@@ -467,25 +576,27 @@ class Store:
         drop = set(remove)
         wanted = list(dict.fromkeys(add))
         changed = []
-        for gif_id in ids:
-            gif = self.get(gif_id)
-            if gif is None:
-                continue
-            tags = [t for t in gif.tags if t not in drop]
-            tags += [t for t in wanted if t not in tags]
-            if tags == gif.tags:
-                continue
-            self.db.execute("UPDATE gifs SET tags = ? WHERE id = ?", (" ".join(tags), gif_id))
-            changed.append(gif_id)
-        self.db.commit()
+        with self._lock:
+            for gif_id in ids:
+                gif = self.get(gif_id)
+                if gif is None:
+                    continue
+                tags = [t for t in gif.tags if t not in drop]
+                tags += [t for t in wanted if t not in tags]
+                if tags == gif.tags:
+                    continue
+                self.db.execute("UPDATE gifs SET tags = ? WHERE id = ?", (" ".join(tags), gif_id))
+                changed.append(gif_id)
+            self.db.commit()
         return changed
 
     def needing_ocr(self) -> list[Gif]:
         return [g for g in self.list_gifs() if not g.ocr_at]
 
     def bump_copies(self, gif_id: int) -> None:
-        self.db.execute("UPDATE gifs SET copies = copies + 1 WHERE id = ?", (gif_id,))
-        self.db.commit()
+        with self._lock:
+            self.db.execute("UPDATE gifs SET copies = copies + 1 WHERE id = ?", (gif_id,))
+            self.db.commit()
 
     def remove(self, gif_id: int) -> str | None:
         """Move a GIF to .trash rather than deleting it, then drop its row.
@@ -493,27 +604,28 @@ class Store:
         Returns the name it was given in .trash, which is what makes the
         removal undoable; None if there was no such GIF.
         """
-        gif = self.get(gif_id)
-        if gif is None:
-            return None
-        trashed = None
-        src = self.gifs_dir / gif.filename
-        if src.exists():
-            self.trash_dir.mkdir(parents=True, exist_ok=True)
-            # rename() replaces silently, so deleting the same filename twice
-            # inside one second would destroy the first trashed copy. Nothing
-            # in .trash may ever be overwritten.
-            stamp = int(time.time())
-            dest = self.trash_dir / f"{stamp}-{gif.filename}"
-            n = 2
-            while dest.exists():
-                dest = self.trash_dir / f"{stamp}-{n}-{gif.filename}"
-                n += 1
-            src.rename(dest)
-            trashed = dest.name
-        self.db.execute("DELETE FROM gifs WHERE id = ?", (gif_id,))
-        self.db.commit()
-        return trashed or ""
+        with self._lock:
+            gif = self.get(gif_id)
+            if gif is None:
+                return None
+            trashed = None
+            src = self.gifs_dir / gif.filename
+            if src.exists():
+                self.trash_dir.mkdir(parents=True, exist_ok=True)
+                # rename() replaces silently, so deleting the same filename twice
+                # inside one second would destroy the first trashed copy. Nothing
+                # in .trash may ever be overwritten.
+                stamp = int(time.time())
+                dest = self.trash_dir / f"{stamp}-{gif.filename}"
+                n = 2
+                while dest.exists():
+                    dest = self.trash_dir / f"{stamp}-{n}-{gif.filename}"
+                    n += 1
+                src.rename(dest)
+                trashed = dest.name
+            self.db.execute("DELETE FROM gifs WHERE id = ?", (gif_id,))
+            self.db.commit()
+            return trashed or ""
 
     # -- the trash -----------------------------------------------------------
 
@@ -552,17 +664,18 @@ class Store:
 
     def restore(self, name: str) -> Gif:
         """Put a trashed GIF back, under its original name where that is free."""
-        path = self._trash_path(name)
-        match = TRASH_NAME.match(path.name)
-        original = match.group("original") if match else path.name
-        dest = self.gifs_dir / original
-        stem = dest.stem
-        n = 2
-        while dest.exists():
-            dest = self.gifs_dir / f"{stem}-{n}.gif"
-            n += 1
-        path.rename(dest)
-        return self._index(dest)
+        with self._lock:
+            path = self._trash_path(name)
+            match = TRASH_NAME.match(path.name)
+            original = match.group("original") if match else path.name
+            dest = self.gifs_dir / original
+            stem = dest.stem
+            n = 2
+            while dest.exists():
+                dest = self.gifs_dir / f"{stem}-{n}.gif"
+                n += 1
+            path.rename(dest)
+            return self._index(dest)
 
     def purge(self, name: str) -> None:
         """Delete one trashed file for good. There is nothing after this."""
@@ -586,12 +699,13 @@ class Store:
         on_disk = {
             p.name for p in self.gifs_dir.iterdir() if p.is_file() and p.suffix.lower() == ".gif"
         }
-        known = {r["filename"] for r in self.db.execute("SELECT filename FROM gifs")}
-        for name in sorted(on_disk - known):
-            self._index(self.gifs_dir / name)
-        for name in known - on_disk:
-            self.db.execute("DELETE FROM gifs WHERE filename = ?", (name,))
-        self.db.commit()
+        with self._lock:
+            known = {r["filename"] for r in self.db.execute("SELECT filename FROM gifs")}
+            for name in sorted(on_disk - known):
+                self._index(self.gifs_dir / name)
+            for name in known - on_disk:
+                self.db.execute("DELETE FROM gifs WHERE filename = ?", (name,))
+            self.db.commit()
         return {"added": len(on_disk - known), "removed": len(known - on_disk)}
 
     def recompute_duplicate_count(self) -> int:
@@ -600,8 +714,10 @@ class Store:
         Signature captured before the scan, so a change during it just triggers
         one more recompute rather than marking a stale count fresh."""
         sig = self.library_signature()
-        self._dup_count = len(self.duplicate_groups())
-        self._dup_signature = sig
+        count = len(self.duplicate_groups())
+        with self._lock:
+            self._dup_count = count
+            self._dup_signature = sig
         return self._dup_count
 
 

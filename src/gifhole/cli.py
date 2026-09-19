@@ -140,6 +140,11 @@ def main() -> None:
         help="let anyone browse without a token, while writes still need --token "
         "(or GIFHOLE_PUBLIC_READS=1). Needs --token as well",
     )
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="allow binding to a non-loopback host without a token (or GIFHOLE_INSECURE=1)",
+    )
     # Optional on purpose: bare `gifhole` still means "serve the library", so
     # the subparser must not be required.
     commands = parser.add_subparsers(dest="command")
@@ -149,6 +154,23 @@ def main() -> None:
 
     if args.command == "move":
         raise SystemExit(move(args))
+
+    is_loopback = args.host in ("127.0.0.1", "localhost", "::1")
+    token_present = bool(args.token or os.environ.get("GIFHOLE_TOKEN"))
+    insecure = args.insecure or os.environ.get("GIFHOLE_INSECURE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if not is_loopback and not token_present and not insecure:
+        print(
+            f"gifhole: binding to {args.host} exposes your library without authentication. "
+            "Set --token (or GIFHOLE_TOKEN) to protect it, or pass --insecure to override.",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(1)
 
     # Every reason to refuse comes first: nothing is printed, no browser is
     # armed, and no port is claimed until the configuration is known to be

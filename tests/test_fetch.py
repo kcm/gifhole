@@ -47,7 +47,10 @@ def test_redirect_chains_are_capped():
         fetch.download("http://example.com/start.gif", client)
 
 
-@pytest.mark.parametrize("addr", ["100.64.0.1", "224.0.0.1", "0.0.0.0", "169.254.169.254"])
+@pytest.mark.parametrize(
+    "addr",
+    ["100.64.0.1", "224.0.0.1", "0.0.0.0", "0.1.2.3", "169.254.169.254"],
+)
 def test_extra_reserved_ranges_are_refused(addr):
     """CGNAT, multicast, and unspecified are not covered by `is_private`."""
     with pytest.raises(fetch.FetchError):

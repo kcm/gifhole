@@ -223,7 +223,10 @@ def create_app(
                 samesite="lax",
                 # Set only over TLS, where it means something; on plain HTTP a
                 # Secure cookie would simply never be stored.
-                secure=request.url.scheme == "https",
+                secure=(
+                    request.url.scheme == "https"
+                    or request.headers.get("x-forwarded-proto", "").lower() == "https"
+                ),
                 max_age=60 * 60 * 24 * 365,
             )
         return response
