@@ -44,7 +44,11 @@ HASH_SIZE = 8
 # flat picture, so they would all match each other. Below this spread between
 # the lightest and darkest sampled pixel, there is nothing to compare and the
 # GIF gets no perceptual hash at all: it can then only ever match exactly.
-MIN_CONTRAST = 8
+MIN_CONTRAST = 12
+
+
+# Prevent decompression bomb denial-of-service
+Image.MAX_IMAGE_PIXELS = 25_000_000
 
 
 def content_hash(data: bytes) -> str:
@@ -61,7 +65,11 @@ def dhash_image(image: Image.Image, size: int = HASH_SIZE) -> int | None:
     too little contrast for the answer to mean anything.
     """
     small = image.convert("L").resize((size + 1, size), Image.Resampling.LANCZOS)
-    pixels = list(small.getdata())
+    pixels = (
+        list(small.get_flattened_data())
+        if hasattr(small, "get_flattened_data")
+        else list(small.getdata())
+    )
     if max(pixels) - min(pixels) < MIN_CONTRAST:
         return None
     bits = 0
@@ -101,7 +109,10 @@ def perceptual_hash(path: Path) -> str:
     """
     try:
         with Image.open(path) as img:
-            count = getattr(img, "n_frames", 1)
+            w, h = img.size
+            if w * h > 25_000_000 or w > 10_000 or h > 10_000:
+                return ""
+            count = min(getattr(img, "n_frames", 1), 5000)
             hashes = []
             for index in _sample_positions(count, HASH_FRAMES):
                 # Per frame, not per file: some GIFs have one unreadable frame
@@ -150,16 +161,80 @@ def frame_ints(phash: str) -> list[int]:
     return [int(h, 16) for h in phash.split()]
 
 
-def frames_near(a: list[int], b: list[int], threshold: int = NEAR_DISTANCE) -> bool:
-    """Whether any frame of `a` is within `threshold` of any frame of `b`, both
-    pre-parsed via frame_ints. Stops at the first near pair instead of finding
-    the minimum: the O(n^2) group scan only needs the yes/no."""
-    for x in a:
-        for y in b:
-            if (x ^ y).bit_count() <= threshold:
+def frames_near(
+    a: list[int],
+    b: list[int],
+    threshold: int = NEAR_DISTANCE,
+    confuser_hashes: set[int] | None = None,
+) -> bool:
+    """Whether frames of `a` match frames of `b`.
+
+    Multi-frame consensus:
+    - If both GIFs have multiple frames:
+      - Returns True if any pair has distance <= 6 (high-confidence match), OR
+      - Returns True if at least 2 frames of `a` each match a frame of `b`
+        within distance <= min(threshold, 10).
+    - If either GIF has only 1 frame:
+      - Returns True if any pair has distance <= min(threshold, 8).
+    - Frames present in `confuser_hashes` (learned from dismissed false-positive pairs)
+      are ignored during comparison.
+    """
+    if not a or not b:
+        return False
+
+    fa = [x for x in a if x not in confuser_hashes] if confuser_hashes else a
+    fb = [y for y in b if y not in confuser_hashes] if confuser_hashes else b
+    if not fa or not fb:
+        fa, fb = a, b
+
+    if len(fa) >= 2 and len(fb) >= 2:
+        frame_thresh = min(threshold, 10)
+        matched_a = 0
+        for x in fa:
+            has_match = False
+            for y in fb:
+                d = (x ^ y).bit_count()
+                if d <= 6:
+                    return True
+                if d <= frame_thresh:
+                    has_match = True
+            if has_match:
+                matched_a += 1
+
+        if matched_a < 2:
+            return False
+
+        matched_b = sum(1 for y in fb if any((x ^ y).bit_count() <= frame_thresh for x in fa))
+        return matched_b >= 2
+
+    single_thresh = min(threshold, 8)
+    for x in fa:
+        for y in fb:
+            if (x ^ y).bit_count() <= single_thresh:
                 return True
     return False
 
 
-def is_near(a: str, b: str, threshold: int = NEAR_DISTANCE) -> bool:
-    return distance(a, b) <= threshold
+def is_near(
+    a: str,
+    b: str,
+    threshold: int = NEAR_DISTANCE,
+    confuser_hashes: set[int] | None = None,
+) -> bool:
+    return frames_near(frame_ints(a), frame_ints(b), threshold, confuser_hashes)
+
+
+def matching_frame_hashes(a: str, b: str, threshold: int = NEAR_DISTANCE) -> list[str]:
+    """Return hex frame hashes from `a` and `b` that matched within `threshold`.
+
+    Used when a duplicate is dismissed to record confuser frames for feedback learning.
+    """
+    ha, hb = a.split(), b.split()
+    matched = set()
+    for x in ha:
+        xv = int(x, 16)
+        for y in hb:
+            if (xv ^ int(y, 16)).bit_count() <= threshold:
+                matched.add(x)
+                matched.add(y)
+    return sorted(matched)

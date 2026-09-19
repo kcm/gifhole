@@ -383,6 +383,23 @@ def test_duplicates_endpoint_groups_what_is_already_there(client):
     assert sorted(g["filename"] for g in groups[0]) == ["one.gif", "two.gif"]
 
 
+def test_dismiss_duplicates_endpoint(client):
+    data = make_textured_gif(46)
+    r1 = client.post("/api/gifs", files={"file": ("one.gif", data, "image/gif")})
+    r2 = client.post(
+        "/api/gifs", files={"file": ("two.gif", data, "image/gif")}, data={"force": "1"}
+    )
+    id1 = r1.json()["id"]
+    id2 = r2.json()["id"]
+    assert len(client.get("/api/duplicates").json()["groups"]) == 1
+
+    res = client.post("/api/duplicates/dismiss", json={"ids": [id1, id2]})
+    assert res.status_code == 200
+    assert res.json()["status"] == "ok"
+    assert res.json()["duplicates"] == 0
+    assert len(client.get("/api/duplicates").json()["groups"]) == 0
+
+
 def test_description_can_be_edited_by_hand(client):
     gif_id = _add(client, "note.gif")
     res = client.patch(f"/api/gifs/{gif_id}", json={"description": "  a dog gives up  "})
@@ -529,6 +546,14 @@ def test_the_query_parameter_sets_a_cookie_so_images_work(guarded):
     assert res.cookies.get("gifhole_token") == "s3cret"
     # The client keeps the cookie, so a bare request now succeeds.
     assert guarded.get("/api/gifs").status_code == 200
+
+
+def test_the_cookie_is_secure_under_https_or_x_forwarded_proto(guarded):
+    """When behind a TLS-terminating proxy, X-Forwarded-Proto=https must set Secure."""
+    res = guarded.get("/", params={"token": "s3cret"}, headers={"x-forwarded-proto": "https"})
+    assert res.status_code == 200
+    set_cookie = res.headers.get("set-cookie", "")
+    assert "Secure" in set_cookie or "secure" in set_cookie
 
 
 def test_the_token_can_come_from_the_environment(tmp_path, monkeypatch):
@@ -969,3 +994,36 @@ def test_ocr_log_shows_the_text_and_the_cleanup(tmp_path, monkeypatch):
     assert any("raw was" in m and "DOR" in m for m in messages), messages
     # And no meaningless "1 line(s)".
     assert not any("line(s)" in m for m in messages)
+
+
+def test_cli_non_loopback_without_token_refuses(monkeypatch, tmp_path):
+    from gifhole import cli
+
+    monkeypatch.setattr("sys.argv", ["gifhole", "--host", "0.0.0.0", "--root", str(tmp_path)])
+    monkeypatch.delenv("GIFHOLE_TOKEN", raising=False)
+    monkeypatch.delenv("GIFHOLE_INSECURE", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+
+
+def test_cli_non_loopback_with_insecure_flag_accepted(monkeypatch, tmp_path):
+    from gifhole import cli
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "gifhole",
+            "--host",
+            "0.0.0.0",
+            "--insecure",
+            "--root",
+            str(tmp_path),
+            "--no-open",
+        ],
+    )
+    monkeypatch.delenv("GIFHOLE_TOKEN", raising=False)
+    monkeypatch.delenv("GIFHOLE_INSECURE", raising=False)
+    monkeypatch.setattr(cli, "resolve_port", lambda h, p: 8777)
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+    cli.main()

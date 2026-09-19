@@ -401,6 +401,19 @@ def create_app(
         groups = store.duplicate_groups()
         return JSONResponse({"groups": [[g.as_dict() for g in group] for group in groups]})
 
+    @app.post("/api/duplicates/dismiss")
+    async def dismiss_duplicates(payload: dict) -> JSONResponse:
+        """Mark a set of GIF IDs as not duplicates of each other."""
+        ids = payload.get("ids") or []
+        if not isinstance(ids, list) or len(ids) < 2:
+            raise HTTPException(400, "expected a list of at least 2 GIF ids")
+        dismissed = store.dismiss_duplicates([int(i) for i in ids])
+        store.recompute_duplicate_count()
+        bus.emit("import", f"marked {len(ids)} items as not duplicates")
+        return JSONResponse(
+            {"status": "ok", "dismissed": dismissed, "duplicates": store._dup_count}
+        )
+
     @app.patch("/api/gifs/{gif_id}")
     async def edit(gif_id: int, payload: dict) -> JSONResponse:
         gif = store.update(

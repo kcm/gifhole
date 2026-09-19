@@ -59,6 +59,7 @@
       <option value="added">newest</option>
       <option value="name">name</option>
       <option value="copies">most copied</option>
+      <option value="favorite">favorites</option>
     </select>
     <button id="add" class="primary">Add GIFs</button>
     <button id="grab" title="download from a GIF link or scrape a page">Grab URL</button>
@@ -103,7 +104,7 @@
            placeholder="tag all, -tag removes" aria-label="tag every selected GIF">
     <ul id="bulkac" class="ac up" hidden></ul>
   </span>
-  <button id="bulkdescribe" title="describe with Claude (one API call each)">Describe</button>
+  <button id="bulkdescribe" title="describe with AI (one API call each)">Describe</button>
   <button id="bulktrash">Move to trash</button>
   <button id="bulkclear">Deselect</button>
 </div>
@@ -207,6 +208,7 @@
       <h2>already have these?</h2>
       <span id="dupecount" class="trashsummary"></span>
       <span class="picker-spacer"></span>
+      <button id="dupedismissall" hidden>Dismiss all</button>
       <button id="dupeaddall">Add all anyway</button>
       <button id="dupeskipall" class="primary">Skip all</button>
     </div>
@@ -254,9 +256,11 @@
           <dt><kbd>Enter</kbd> <kbd>c</kbd></dt><dd>copy it</dd>
           <dt><kbd>u</kbd></dt><dd>copy its URL</dd>
           <dt><kbd>p</kbd></dt><dd>copy its file path</dd>
+          <dt><kbd>f</kbd></dt><dd>star / favorite</dd>
+          <dt><kbd>1</kbd>&ndash;<kbd>9</kbd></dt><dd>copy favorites 1&ndash;9</dd>
           <dt><kbd>t</kbd></dt><dd>edit tags</dd>
           <dt><kbd>r</kbd></dt><dd>rename</dd>
-          <dt><kbd>e</kbd></dt><dd>describe with Claude</dd>
+          <dt><kbd>e</kbd></dt><dd>describe with AI</dd>
         </dl>
       </section>
       <section>

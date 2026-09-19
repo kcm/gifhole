@@ -264,16 +264,6 @@ class Store:
             row = self.db.execute("SELECT * FROM gifs WHERE id = ?", (gif_id,)).fetchone()
             return self._row_to_gif(row) if row else None
 
-    def toggle_favorite(self, gif_id: int) -> Gif | None:
-        with self._lock:
-            gif = self.get(gif_id)
-            if gif is None:
-                return None
-            new_fav = 0 if gif.favorite else 1
-            self.db.execute("UPDATE gifs SET favorite = ? WHERE id = ?", (new_fav, gif_id))
-            self.db.commit()
-            return self.get(gif_id)
-
     def all_tags(self) -> list[tuple[str, int]]:
         counts: dict[str, int] = {}
         with self._lock:
@@ -458,10 +448,16 @@ class Store:
         sha = dedupe.content_hash(data)
         phash = dedupe.perceptual_hash(path) if path else ""
         exact, near = [], []
+        dismissed = self.get_dismissed_duplicate_pairs()
+        confusers = self.get_confuser_hashes()
         for gif in self.list_gifs():
+            if candidate_id is not None:
+                pair = (min(candidate_id, gif.id), max(candidate_id, gif.id))
+                if pair in dismissed:
+                    continue
             if gif.sha256 and gif.sha256 == sha:
                 exact.append((gif, "exact"))
-            elif phash and dedupe.is_near(gif.phash, phash):
+            elif phash and dedupe.is_near(gif.phash, phash, confuser_hashes=confusers):
                 near.append((gif, "near"))
         return exact + near
 
@@ -504,6 +500,8 @@ class Store:
         """Duplicates already sitting in the library, grouped."""
         gifs = [g for g in self.list_gifs() if g.sha256 or g.phash]
         frames = {g.id: dedupe.frame_ints(g.phash) for g in gifs}
+        dismissed = self.get_dismissed_duplicate_pairs()
+        confusers = self.get_confuser_hashes()
         seen: set[int] = set()
         groups = []
         for i, gif in enumerate(gifs):
@@ -513,8 +511,11 @@ class Store:
             for other in gifs[i + 1 :]:
                 if other.id in seen:
                     continue
+                pair = (min(gif.id, other.id), max(gif.id, other.id))
+                if pair in dismissed:
+                    continue
                 same = (gif.sha256 and gif.sha256 == other.sha256) or dedupe.frames_near(
-                    frames[gif.id], frames[other.id]
+                    frames[gif.id], frames[other.id], confuser_hashes=confusers
                 )
                 if same:
                     group.append(other)
@@ -533,7 +534,8 @@ class Store:
             row = self.db.execute(
                 "SELECT COUNT(*), COALESCE(SUM(id), 0), COALESCE(SUM(LENGTH(phash)), 0) FROM gifs"
             ).fetchone()
-            return tuple(row)
+            dismissed = self.db.execute("SELECT COUNT(*) FROM dismissed_duplicates").fetchone()[0]
+            return (*tuple(row), dismissed)
 
     # What a library-wide job should touch. Named rather than boolean flags so
     # the UI can show a count for exactly what it is about to spend money on.

@@ -23,14 +23,11 @@ const chosenModel = () => localStorage.getItem(MODEL_KEY) || "";
 const describeUndo = new Map();
 let capabilities = { ocr: false, enrich: false, ffmpeg: false };
 
-function handleTokenParam() {
-  const url = new URL(window.location.href);
-  if (url.searchParams.has("token")) {
-    url.searchParams.delete("token");
-    window.history.replaceState({}, "", url.pathname + url.search + url.hash);
-  }
+function sizeOf(bytes) {
+  return bytes > 1048576
+    ? `${(bytes / 1048576).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
-handleTokenParam();
 
 // ---------------------------------------------------------------- clipboard
 
@@ -109,16 +106,18 @@ async function copyFileViaServer(gif) {
 // One copy path for both mouse and keyboard: a click maps its modifiers to a
 // mode, a shortcut names the mode outright. A keydown counts as a user gesture,
 // so the clipboard write is allowed either way.
-async function copyGif(gif, card, mode = "gif") {
+async function copyGif(gif, card = null, mode = "gif") {
   try {
     let what;
     if (mode === "url") what = await copyText(location.origin + gif.url);
     else if (mode === "path") what = await copyText(`${state.root}/${gif.filename}`);
     else if (capabilities.file_clipboard) what = await copyFileViaServer(gif);
-    else what = await copyImage(gif, card.querySelector("img"));
+    else what = await copyImage(gif, card ? card.querySelector("img") : null);
     toast(what);
-    card.classList.add("flash");
-    setTimeout(() => card.classList.remove("flash"), 500);
+    if (card) {
+      card.classList.add("flash");
+      setTimeout(() => card.classList.remove("flash"), 500);
+    }
     fetch(`/api/gifs/${gif.id}/copied`, { method: "POST" });
   } catch (err) {
     toast(`copy failed: ${err.message}`);
@@ -151,8 +150,10 @@ function card(gif) {
   el.innerHTML = `
     <figure><img alt="" loading="lazy"></figure>
     <div class="meta">
+      <button class="fav" title="star as favorite (press 1-9 to copy top favorites)" aria-pressed="false">star</button>
       <span class="name" contenteditable="plaintext-only" spellcheck="false"></span>
       <span class="dims"></span>
+      <button class="compress" title="compress for Discord (<10MB)" hidden>fit</button>
       <button class="mark" title="select for bulk actions" aria-pressed="false"></button>
       <button class="del" title="move to trash">x</button>
     </div>
@@ -178,7 +179,60 @@ function card(gif) {
     </div>`;
 
   el.querySelector("img").src = gif.url;
-  el.querySelector(".dims").textContent = `${gif.width}x${gif.height}`;
+  const dimsEl = el.querySelector(".dims");
+  const isOversize = gif.bytes > 10 * 1024 * 1024;
+  dimsEl.textContent = `${gif.width}x${gif.height} · ${sizeOf(gif.bytes)}`;
+  if (isOversize) {
+    dimsEl.classList.add("oversize");
+    dimsEl.title = `${sizeOf(gif.bytes)}: exceeds Discord's 10MB free upload limit`;
+  }
+
+  const compressBtn = el.querySelector(".compress");
+  if (capabilities.ffmpeg && isOversize && !capabilities.read_only) {
+    compressBtn.hidden = false;
+    compressBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      compressBtn.disabled = true;
+      toast("compressing for Discord…");
+      try {
+        const res = await fetch(`/api/gifs/${gif.id}/compress`, { method: "POST" });
+        if (!res.ok) throw new Error((await res.json()).detail || res.status);
+        const data = await res.json();
+        toast(`compressed to ${sizeOf(data.gif.bytes)}!`);
+        load();
+      } catch (err) {
+        toast(`compress failed: ${err.message}`);
+      } finally {
+        compressBtn.disabled = false;
+      }
+    });
+  }
+
+  const favBtn = el.querySelector(".fav");
+  const isFav = !!gif.favorite;
+  favBtn.classList.toggle("starred", isFav);
+  favBtn.setAttribute("aria-pressed", isFav ? "true" : "false");
+  if (capabilities.read_only) {
+    favBtn.disabled = true;
+  } else {
+    favBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const next = !gif.favorite;
+      gif.favorite = next ? 1 : 0;
+      favBtn.classList.toggle("starred", next);
+      favBtn.setAttribute("aria-pressed", next ? "true" : "false");
+      try {
+        await fetch(`/api/gifs/${gif.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ favorite: next }),
+        });
+        toast(next ? "starred as favorite (press 1-9 to copy)" : "unstarred");
+      } catch (err) {
+        toast(`favorite failed: ${err.message}`);
+      }
+    });
+  }
 
   // Both are search keys, and they answer different questions: the quote is
   // text burned into the picture, read locally, and is a fact about the file.
@@ -908,9 +962,13 @@ function showDupes(items) {
 // Duplicates already sitting in the library, as opposed to one arriving. Same
 // panel, different shape: every member is a real GIF, so each can be trashed
 // (recoverably) rather than accepted or skipped.
+let existingDupeGroups = [];
+
 function showExistingDupes(groups) {
   pendingDupes = [];
+  existingDupeGroups = groups;
   $("#dupeaddall").hidden = true;
+  $("#dupedismissall").hidden = false;
   $("#dupeskipall").textContent = "Done";
   document.querySelector("#dupes h2").textContent = "duplicates in your library";
   $("#dupecount").textContent =
@@ -941,7 +999,28 @@ function showExistingDupes(groups) {
         fig.append(img, cap, bin);
         matches.append(fig);
       }
-      row.append(matches);
+      const actions = document.createElement("div");
+      actions.className = "dupeactions";
+      const dismissBtn = document.createElement("button");
+      dismissBtn.className = "dupedismiss";
+      dismissBtn.textContent = "Not duplicates";
+      dismissBtn.title = "Mark as not duplicates and remember for future scans";
+      dismissBtn.addEventListener("click", async () => {
+        dismissBtn.disabled = true;
+        try {
+          const res = await postJSON("/api/duplicates/dismiss", { ids: group.map((g) => g.id) });
+          row.remove();
+          toast("marked as not duplicates");
+          updateDupeAlert(res.duplicates);
+          if (!$("#dupelist").children.length) closeDupes();
+        } catch (err) {
+          dismissBtn.disabled = false;
+          toast(`could not dismiss: ${err.message}`);
+        }
+      });
+      actions.append(dismissBtn);
+
+      row.append(matches, actions);
       return row;
     }),
   );
@@ -951,11 +1030,29 @@ function showExistingDupes(groups) {
 // Restores the panel to its arriving-duplicate shape, since the two share it.
 function resetDupePanel() {
   $("#dupeaddall").hidden = false;
+  $("#dupedismissall").hidden = true;
   $("#dupeskipall").textContent = "Skip all";
   document.querySelector("#dupes h2").textContent = "already have these?";
 }
 
 $("#dupeskipall").addEventListener("click", closeDupes);
+$("#dupedismissall").addEventListener("click", async () => {
+  const groups = [...existingDupeGroups];
+  if (!groups.length) return closeDupes();
+  $("#dupedismissall").disabled = true;
+  try {
+    for (const group of groups) {
+      await postJSON("/api/duplicates/dismiss", { ids: group.map((g) => g.id) });
+    }
+    closeDupes();
+    toast(`dismissed ${groups.length} duplicate groups`);
+    updateDupeAlert(0);
+  } catch (err) {
+    toast(`could not dismiss duplicates: ${err.message}`);
+  } finally {
+    $("#dupedismissall").disabled = false;
+  }
+});
 $("#dupeaddall").addEventListener("click", async () => {
   const items = [...pendingDupes];
   closeDupes();
@@ -1042,7 +1139,7 @@ addEventListener("drop", (e) => {
 
 // A page can hold hundreds of GIFs, so discovery and import are separate: we
 // list what's there, let you pick, then download only the ticked ones.
-async function grab(url, title = "") {
+async function grab(url, title = "", { autoImportDirect = true } = {}) {
   if (!url) return;
   toast("looking…");
   const res = await fetch("/api/fetch/discover", {
@@ -1055,9 +1152,9 @@ async function grab(url, title = "") {
     return;
   }
   const { kind, candidates } = await res.json();
-  // A direct link is unambiguous; no point making you tick one box. A dragged
-  // title is the only name a Giphy or Tenor link carries, so it is kept.
-  if (kind === "direct") {
+  // A direct link is unambiguous on interactive add; for external navigation,
+  // require picker confirmation to prevent drive-by imports.
+  if (kind === "direct" && autoImportDirect) {
     return importUrls(candidates.map((c) => ({ ...c, title: c.title || title })));
   }
   openPicker(candidates);
@@ -1757,13 +1854,13 @@ async function loadModelPicker() {
       return opt;
     }),
   );
-  // Store only a deliberate choice, and only when it differs from the default,
-  // so the default can keep moving with the server without a stale pin.
   const heading = $("#libdescribeheading");
   const updateHeading = (mId) => {
     if (heading) heading.textContent = `Describe with ${activeProviderName(mId)}`;
   };
   updateHeading(current);
+  // Store only a deliberate choice, and only when it differs from the default,
+  // so the default can keep moving with the server without a stale pin.
   sel.onchange = () => {
     if (sel.value === body.default) localStorage.removeItem(MODEL_KEY);
     else localStorage.setItem(MODEL_KEY, sel.value);
@@ -1837,7 +1934,8 @@ $("#libdescribe").addEventListener("click", async () => {
   const scope = libScope.value;
   const n = libStats?.[scope] ?? 0;
   if (!n) return;
-  if (!confirm(`Describe ${plural(n, "GIF")} with Claude? That is ${n} API calls, and costs money.`)) {
+  const provider = activeProviderName();
+  if (!confirm(`Describe ${plural(n, "GIF")} with ${provider}? That is ${n} API calls, and costs money.`)) {
     return;
   }
   closeLibrary();
@@ -1958,9 +2056,6 @@ async function openTrash() {
   trashPanel.hidden = false;
 }
 
-const sizeOf = (bytes) =>
-  bytes > 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
-
 function agoOf(seconds) {
   const mins = Math.max(0, (Date.now() / 1000 - seconds) / 60);
   if (mins < 1) return "just now";
@@ -2041,7 +2136,8 @@ async function describeIds(ids) {
   if (!capabilities.enrich) {
     return toast(capabilities.enrich_reason || "describing needs an API key");
   }
-  if (!confirm(`Describe ${ids.length} GIF${ids.length > 1 ? "s" : ""} with Claude? ` +
+  const provider = activeProviderName();
+  if (!confirm(`Describe ${ids.length} GIF${ids.length > 1 ? "s" : ""} with ${provider}? ` +
       `That is one API call each, and costs money.`)) {
     return;
   }
@@ -2113,6 +2209,7 @@ const READ_ONLY_KEYS = new Set([
   "Home", "End", "Enter", "c", "u", "p", "/", "?", "s", "Escape",
   // The console only reads the log, which a guest is allowed to see.
   "`", "~",
+  "1", "2", "3", "4", "5", "6", "7", "8", "9",
 ]);
 
 const help = $("#help");
@@ -2128,6 +2225,7 @@ const CARD_KEYS = {
   Enter: (t) => copyGif(t.gif, t.el, "gif"),
   u: (t) => copyGif(t.gif, t.el, "url"),
   p: (t) => copyGif(t.gif, t.el, "path"),
+  f: (t) => t.el.querySelector(".fav")?.click(),
   // Same rule as x: act on the marked set when there is one, otherwise on the
   // current GIF. So "t" is always "tag what I mean", never a different key.
   t: (t) => (marked.size ? $("#bulktag").focus() : t.el.querySelector(".taginput").focus()),
@@ -2188,6 +2286,21 @@ addEventListener("keydown", (e) => {
   if (e.key === "/") {
     e.preventDefault();
     return search.focus();
+  }
+
+  if (e.key >= "1" && e.key <= "9") {
+    const num = parseInt(e.key, 10);
+    const favs = state.gifs.filter((g) => g.favorite);
+    const target = favs[num - 1];
+    if (target) {
+      e.preventDefault();
+      const cardEl = grid.children[state.gifs.findIndex((g) => g.id === target.id)];
+      copyGif(target, cardEl, "gif");
+      toast(`copied favorite #${num}: ${target.title || target.filename}`);
+    } else {
+      toast(`no favorite #${num} set (press f to star a GIF)`);
+    }
+    return;
   }
 
   const cols = columnCount();
@@ -2262,6 +2375,16 @@ addEventListener("keydown", (e) => {
 
 help.addEventListener("click", closeHelp);
 
+// Clean any token query parameter out of the address bar so it does not
+// linger in history, bookmarks, or Referer headers.
+function handleTokenParam() {
+  const params = new URLSearchParams(location.search);
+  if (!params.has("token")) return;
+  params.delete("token");
+  const rest = params.toString();
+  history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);
+}
+
 // Arriving from the bookmarklet. Two shapes, because an older bookmark saved
 // before this existed still sends ?add=<page url> and should keep working.
 function handleAddParam() {
@@ -2272,8 +2395,8 @@ function handleAddParam() {
   // and the URL is not left carrying someone else's link.
   params.delete("add");
   const rest = params.toString();
-  history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : ""));
-  if (/^https?:\/\//i.test(url)) grab(url);
+  history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);
+  if (/^https?:\/\//i.test(url)) grab(url, "", { autoImportDirect: false });
   else toast("that bookmark did not carry a usable link");
 }
 
@@ -2337,14 +2460,14 @@ async function handleAddFragment() {
   }
 
   if (!candidates.length) return toast("nothing to import from that page");
-  if (candidates.length === 1) return importUrls(candidates);
-  // heroOnly: a bookmarklet press usually lands on one GIF's page, which hands
-  // us that GIF plus its size variants; pre-select only the main one.
+  // Always open the picker with the candidate(s) pre-selected so external
+  // navigation cannot trigger an unprompted drive-by import without a user gesture.
   openPicker(candidates, { heroOnly: true });
 }
 
 load();
 pollJobs();
+handleTokenParam();
 handleAddParam();
 handleAddFragment();
 // Changing only the fragment does not reload the document, so a bookmarklet

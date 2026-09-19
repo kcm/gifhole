@@ -623,6 +623,47 @@ button[disabled]:active {
   font-size: 11px;
 }
 
+.card .dims.oversize {
+  color: #c0392b;
+  font-weight: bold;
+}
+
+.card .fav {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--panel-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.card .fav:hover {
+  color: #f1c40f;
+}
+
+.card .fav.starred {
+  color: #e67e22;
+}
+
+.card .compress {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--panel-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.card .compress:hover {
+  color: var(--link-hot);
+}
+
 .rowtags {
   position: relative;
   padding: 0 8px 6px;
@@ -1311,6 +1352,19 @@ button[disabled]:active {
   white-space: nowrap;
 }
 
+.dupeactions button.dupedismiss {
+  background: var(--panel-tint);
+  border: 1px solid var(--rule);
+  color: var(--fg);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.dupeactions button.dupedismiss:hover {
+  border-color: var(--link-hot);
+  color: var(--link-hot);
+}
+
 /* -- library panel --------------------------------------------------------- */
 
 .libsection {
@@ -1452,46 +1506,4 @@ body.readonly .hint::after {
   font-style: normal;
   font-weight: bold;
   color: var(--link-hot);
-}
-
-.card-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-top: 0.15rem;
-  font-size: 0.72rem;
-  color: var(--muted);
-  font-family: var(--mono);
-}
-
-.oversize {
-  color: var(--danger, #b91c1c);
-  font-weight: 600;
-  cursor: help;
-}
-
-.card-actions .compress {
-  color: var(--accent);
-  padding: 0.15rem 0.35rem;
-  font-size: 0.85rem;
-  line-height: 1;
-}
-
-.card-actions .compress:hover {
-  background: var(--chip-hover);
-  border-radius: var(--chip-radius);
-}
-
-.card-actions .fav {
-  font-size: 1rem;
-  line-height: 1;
-  color: var(--muted);
-  cursor: pointer;
-  padding: 0.1rem 0.25rem;
-}
-
-.card-actions .fav:hover,
-.card-actions .fav.starred {
-  color: #eab308;
 }

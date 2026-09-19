@@ -213,6 +213,28 @@ def test_duplicate_groups_finds_copies_already_in_the_library(store):
     assert sorted(g.filename for g in groups[0]) == ["one.gif", "two.gif"]
 
 
+def test_dismiss_duplicates_persists_and_excludes_from_groups(store):
+    data = make_textured_gif(15)
+    g1 = store.add_bytes("one.gif", data)
+    g2 = store.add_bytes("two.gif", data)
+    assert len(store.duplicate_groups()) == 1
+
+    # Dismissing the pair removes them from duplicate_groups
+    dismissed = store.dismiss_duplicates([g1.id, g2.id])
+    assert dismissed == 1
+    assert (min(g1.id, g2.id), max(g1.id, g2.id)) in store.get_dismissed_duplicate_pairs()
+    assert len(store.duplicate_groups()) == 0
+
+
+def test_dismiss_duplicates_learns_confuser_frames(store):
+    g1 = store.add_bytes("first.gif", make_textured_gif(16))
+    g2 = store.add_bytes("second.gif", make_textured_gif(16))
+
+    store.dismiss_duplicates([g1.id, g2.id])
+    confusers = store.get_confuser_hashes(min_hits=1)
+    assert len(confusers) > 0
+
+
 def _staged(data: bytes):
     """Write bytes somewhere readable, since a perceptual hash needs a file."""
     import tempfile
@@ -375,3 +397,52 @@ def test_unused_filter_and_prune_stats(store):
     assert s["unused"] == 1  # only b was never pasted
     assert s["untitled"] == 2  # neither has a title
     assert s["top_tags"] == [{"tag": "cat", "count": 1}]
+
+
+def test_gif_dimensions_rejects_decompression_bomb():
+    """A GIF header declaring huge dimensions is rejected early before decompression."""
+    header = b"GIF89a" + (20000).to_bytes(2, "little") + (20000).to_bytes(2, "little")
+    with pytest.raises(ValueError, match="exceed safe limits"):
+        gif_dimensions(header)
+
+
+def test_store_concurrent_threads(store):
+    """Multiple threads operating on the store simultaneously do not encounter
+    database locks or state corruptions."""
+    import concurrent.futures
+
+    def worker(i):
+        data = make_textured_gif(i % 50 + 1)
+        gif = store.add_bytes(f"thread_{i}.gif", data, tags=f"tag{i}")
+        store.bump_copies(gif.id)
+        store.update(gif.id, title=f"Title {i}")
+        store.set_ocr(gif.id, f"OCR text {i}")
+        gifs = store.list_gifs()
+        assert len(gifs) > 0
+        assert store.get(gif.id) is not None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(worker, i) for i in range(20)]
+        for f in concurrent.futures.as_completed(futures):
+            f.result()
+
+
+def test_favorite_flag_and_filters(store):
+    """Marking a GIF as favorite allows filtering and sorting by favorites."""
+    a = store.add_bytes("first.gif", make_gif())
+    store.add_bytes("second.gif", make_gif())
+
+    assert a.favorite == 0
+    assert store.list_gifs("favorite") == []
+
+    updated = store.update(a.id, favorite=True)
+    assert updated is not None and updated.favorite == 1
+    assert [g.filename for g in store.list_gifs("favorite")] == ["first.gif"]
+    assert [g.filename for g in store.list_gifs("starred")] == ["first.gif"]
+
+    # Sorting by favorite puts favorites first
+    sorted_gifs = store.list_gifs(sort="favorite")
+    assert sorted_gifs[0].filename == "first.gif"
+
+    store.update(a.id, favorite=False)
+    assert store.list_gifs("favorite") == []
