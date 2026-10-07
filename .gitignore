@@ -21,3 +21,7 @@ gifs/
 
 # Local-only notes (never shared)
 *.local.md
+
+# Environment variables
+.env
+.env.*

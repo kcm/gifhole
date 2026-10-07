@@ -18,6 +18,27 @@ from gifhole.frames import sample_frames, to_png_bytes
 log = logging.getLogger(__name__)
 
 
+def load_config() -> dict:
+    """Read local config from config.json in GIFHOLE_ROOT, ~/.gifhole, or ~/.config/gifhole."""
+    candidates = []
+    if os.environ.get("GIFHOLE_CONFIG"):
+        candidates.append(Path(os.environ["GIFHOLE_CONFIG"]))
+    root_str = os.environ.get("GIFHOLE_ROOT")
+    if root_str:
+        candidates.append(Path(root_str) / "config.json")
+    candidates.append(Path.home() / ".gifhole" / "config.json")
+    candidates.append(Path.home() / ".config" / "gifhole" / "config.json")
+    candidates.append(Path.cwd() / "config.json")
+
+    for path in candidates:
+        if path.is_file():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:  # noqa: BLE001
+                log.debug("could not parse %s: %s", path, exc)
+    return {}
+
+
 def gemini_api_key() -> str | None:
     return (
         os.environ.get("GEMINI_API_KEY")
@@ -26,11 +47,107 @@ def gemini_api_key() -> str | None:
     )
 
 
+def ollama_host() -> str:
+    cfg = load_config().get("ollama") or {}
+    host = os.environ.get("GIFHOLE_OLLAMA_URL") or os.environ.get("OLLAMA_HOST")
+    if not host:
+        if "host" in cfg:
+            host = str(cfg["host"])
+        elif "server" in cfg:
+            server = str(cfg["server"]).strip()
+            port = cfg.get("port", 11434)
+            if ":" in server and not server.startswith(("http://", "https://")):
+                host = f"http://{server}"
+            elif server.startswith(("http://", "https://")):
+                host = server if ":" in server.split("//", 1)[-1] else f"{server}:{port}"
+            else:
+                host = f"http://{server}:{port}"
+        else:
+            return "http://localhost:11434"
+    if not host.startswith(("http://", "https://")):
+        host = f"http://{host}"
+    return host.rstrip("/")
+
+
+def ollama_configured() -> bool:
+    if os.environ.get("GIFHOLE_OLLAMA_URL") or os.environ.get("OLLAMA_HOST"):
+        return True
+    if os.environ.get("GIFHOLE_ENRICH_BACKEND") == "ollama":
+        return True
+    cfg = load_config()
+    return "ollama" in cfg or "ollama_servers" in cfg
+
+
+def fetch_ollama_models(host: str | None = None) -> list[dict]:
+    """Return configured or dynamic vision models for Ollama."""
+    cfg = load_config().get("ollama") or {}
+    configured_models = cfg.get("models")
+    if configured_models and isinstance(configured_models, list):
+        models = []
+        for m in configured_models:
+            name = str(m).strip()
+            if not name:
+                continue
+            mid = name if name.startswith("ollama/") else f"ollama/{name}"
+            models.append({"id": mid, "name": f"Ollama: {name.removeprefix('ollama/')}"})
+        if models:
+            return models
+
+    # Query dynamically from the server
+    url = f"{host or ollama_host()}/api/tags"
+    try:
+        import httpx
+
+        with httpx.Client(timeout=2.0) as client:
+            res = client.get(url)
+            if res.status_code != 200:
+                return []
+            raw_models = res.json().get("models", [])
+            models = []
+            for m in raw_models:
+                name = m.get("name") or m.get("model")
+                if not name:
+                    continue
+                caps = m.get("capabilities") or []
+                is_vision = "vision" in caps
+                if not is_vision:
+                    details = m.get("details") or {}
+                    fam = details.get("family", "").lower()
+                    families = [f.lower() for f in (details.get("families") or [])]
+                    low = name.lower()
+                    is_vision = any(
+                        v in low or v in fam or any(v in f for f in families)
+                        for v in ("vision", "vl", "llava", "glimmer", "minicpm")
+                    )
+                if is_vision:
+                    models.append({"id": f"ollama/{name}", "name": f"Ollama: {name}"})
+            return models
+    except Exception as exc:  # noqa: BLE001 - a listing failure falls back cleanly
+        log.debug("could not dynamically list ollama models: %s", exc)
+    return []
+
+
+def ollama_available() -> tuple[bool, str]:
+    if not ollama_configured():
+        return False, "no Ollama host configured"
+    models = fetch_ollama_models()
+    if not models:
+        return False, f"cannot connect or no vision models found at {ollama_host()}"
+    return True, ""
+
+
 def _detect_default_model() -> str:
+    if os.environ.get("GIFHOLE_ENRICH_BACKEND") == "ollama":
+        models = fetch_ollama_models()
+        return models[0]["id"] if models else "ollama"
     if os.environ.get("GIFHOLE_ENRICH_BACKEND") == "gemini":
         return "gemini-3.6-flash"
     if os.environ.get("GIFHOLE_ENRICH_BACKEND") == "claude":
         return "claude-sonnet-5"
+    if ollama_configured():
+        models = fetch_ollama_models()
+        if models:
+            return models[0]["id"]
     if gemini_api_key():
         return "gemini-3.6-flash"
     return "claude-sonnet-5"
@@ -99,21 +216,34 @@ def fetch_gemini_models() -> list[dict]:
     return list(GEMINI_MODELS)
 
 
-def list_models() -> list[dict]:
+_models_cache: list[dict] | None = None
+_models_cache_time: float = 0.0
+MODELS_CACHE_TTL = 30.0
+
+
+def list_models(force: bool = False) -> list[dict]:
     """The account's available models, as [{"id", "name"}], for the picker.
 
     Empty when enrichment cannot run (no key, no package), so the UI simply
-    offers no choice. Cached for the process: the list barely changes and the
-    call, though free, is a network round trip.
+    offers no choice. Cached for 30s to avoid unnecessary network round trips
+    while still picking up local model changes or newly booted servers.
     """
-    global _models_cache
-    if _models_cache is not None:
+    global _models_cache, _models_cache_time
+    import time
+
+    now = time.time()
+    if not force and _models_cache is not None and (now - _models_cache_time) < MODELS_CACHE_TTL:
         return _models_cache
     ok, _ = available()
     if not ok:
         return []
 
     models: list[dict] = []
+    if ollama_configured():
+        o_ok, _ = ollama_available()
+        if o_ok:
+            models.extend(fetch_ollama_models())
+
     g_ok, _ = gemini_available()
     if g_ok:
         models.extend(fetch_gemini_models())
@@ -132,6 +262,7 @@ def list_models() -> list[dict]:
             log.debug("could not list anthropic models: %s", exc)
 
     _models_cache = models
+    _models_cache_time = now
     return _models_cache
 
 
@@ -252,13 +383,20 @@ def claude_available() -> tuple[bool, str]:
 
 def available() -> tuple[bool, str]:
     """Report whether enrichment can actually run, and why not when it cannot."""
+    if ollama_configured():
+        o_ok, _ = ollama_available()
+        if o_ok:
+            return True, ""
     g_ok, _ = gemini_available()
     if g_ok:
         return True, ""
     c_ok, _ = claude_available()
     if c_ok:
         return True, ""
-    return False, "no LLM API key. Set GEMINI_API_KEY or ANTHROPIC_API_KEY"
+    if ollama_configured():
+        _, why = ollama_available()
+        return False, why
+    return False, "no LLM configured. Set GEMINI_API_KEY, ANTHROPIC_API_KEY, or OLLAMA_HOST"
 
 
 MAX_GEMINI_ENUM_ITEMS = 40
@@ -409,13 +547,100 @@ def _describe_with_claude(
     return merge_result(data, vocabulary)
 
 
+def _extract_json(text: str) -> dict:
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    s = text.find("{")
+    e = text.rfind("}")
+    if s != -1 and e != -1 and e > s:
+        text = text[s : e + 1]
+    return json.loads(text)
+
+
+def _describe_with_ollama(
+    images: list[bytes],
+    vocabulary: list[str],
+    model: str,
+) -> dict:
+    import base64
+
+    import httpx
+
+    actual_model = model
+    if actual_model.startswith("ollama/"):
+        actual_model = actual_model.removeprefix("ollama/")
+    elif actual_model.startswith("ollama:"):
+        actual_model = actual_model.removeprefix("ollama:")
+
+    host = ollama_host()
+    b64_images = [base64.standard_b64encode(png).decode("ascii") for png in images]
+    prompt_text = PROMPT + vocabulary_note(vocabulary)
+    schema = build_schema(vocabulary)
+
+    payload = {
+        "model": actual_model,
+        "stream": False,
+        "format": schema,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt_text,
+                "images": b64_images,
+            }
+        ],
+    }
+
+    try:
+        with httpx.Client(timeout=120.0) as client:
+            res = client.post(f"{host}/api/chat", json=payload)
+            # Some Ollama runners (like MLX) do not support the format/grammar constraint (501).
+            # Fall back to prompt-instructed JSON output.
+            if res.status_code == 501 or "structured output is unavailable" in res.text:
+                fallback_prompt = (
+                    prompt_text
+                    + "\n\nRespond ONLY with a valid JSON object matching this schema:\n"
+                    "{\n"
+                    '  "description": "One sentence describing what happens in the GIF.",\n'
+                    '  "meme_name": "The meme name if recognizable, else empty string.",\n'
+                    '  "known_tags": ["at most 6 tags from existing vocabulary"],\n'
+                    '  "new_tags": ["at most 2 new tags"]\n'
+                    "}\n"
+                    "Do not include any commentary or markdown outside the JSON."
+                )
+                payload["messages"][0]["content"] = fallback_prompt
+                del payload["format"]
+                res = client.post(f"{host}/api/chat", json=payload)
+    except Exception as exc:
+        raise EnrichError(f"Ollama call failed: {exc}") from exc
+
+    if res.status_code != 200:
+        raise EnrichError(f"Ollama API error ({res.status_code}): {res.text[:160]}")
+
+    body = res.json()
+    content = body.get("message", {}).get("content", "")
+    try:
+        data = _extract_json(content)
+    except Exception as exc:
+        raise EnrichError(f"unparseable Ollama response: {content[:120]}") from exc
+
+    return merge_result(data, vocabulary)
+
+
 def describe_gif(
     path: Path,
     frames: int = 3,
     vocabulary: list[str] | None = None,
     model: str | None = None,
 ) -> dict:
-    """Ask an LLM (Gemini or Claude) what a GIF shows. Returns {description, meme_name, tags}.
+    """Ask an LLM (Gemini, Claude, Ollama) what a GIF shows.
+
+    Returns {description, meme_name, tags}.
 
     `vocabulary` is the library's existing tags, most-used first. Passing it
     keeps the tagging consistent instead of inventing a synonym per GIF.
@@ -431,8 +656,14 @@ def describe_gif(
     if not images:
         raise EnrichError("could not read any frames from that GIF")
 
+    if model.startswith("ollama/") or model.startswith("ollama:"):
+        return _describe_with_ollama(images, vocabulary, model)
     if model.startswith("gemini") or model.startswith("gemma"):
         return _describe_with_gemini(images, vocabulary, model)
+    if model.startswith("claude"):
+        return _describe_with_claude(images, vocabulary, model)
+    if ollama_configured():
+        return _describe_with_ollama(images, vocabulary, model)
     return _describe_with_claude(images, vocabulary, model)
 
 

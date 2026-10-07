@@ -145,12 +145,20 @@ def main() -> None:
         action="store_true",
         help="allow binding to a non-loopback host without a token (or GIFHOLE_INSECURE=1)",
     )
+    parser.add_argument(
+        "--ollama",
+        metavar="URL",
+        help="Ollama server URL (e.g. http://jorge.local:11434, or OLLAMA_HOST)",
+    )
     # Optional on purpose: bare `gifhole` still means "serve the library", so
     # the subparser must not be required.
     commands = parser.add_subparsers(dest="command")
     mover = commands.add_parser("move", help="move the library to another directory")
     mover.add_argument("destination", type=Path, help="where to move it")
     args = parser.parse_args()
+
+    if args.ollama:
+        os.environ["OLLAMA_HOST"] = args.ollama
 
     if args.command == "move":
         raise SystemExit(move(args))

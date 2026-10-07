@@ -682,6 +682,215 @@ def test_describe_gif_routes_to_gemini(tmp_path, monkeypatch):
     assert result["description"] == "described by gemini"
 
 
+def test_ollama_host_normalization(monkeypatch):
+    import gifhole.enrich as enrich
+
+    monkeypatch.setattr(enrich, "load_config", lambda: {})
+    monkeypatch.delenv("GIFHOLE_OLLAMA_URL", raising=False)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    assert enrich.ollama_host() == "http://localhost:11434"
+
+    monkeypatch.setenv("OLLAMA_HOST", "jorge.local:11434")
+    assert enrich.ollama_host() == "http://jorge.local:11434"
+
+    monkeypatch.setenv("OLLAMA_HOST", "https://ollama.example.com/")
+    assert enrich.ollama_host() == "https://ollama.example.com"
+
+    monkeypatch.setenv("GIFHOLE_OLLAMA_URL", "http://custom:11434/")
+    assert enrich.ollama_host() == "http://custom:11434"
+
+
+def test_ollama_config_file(tmp_path, monkeypatch):
+    import json as _json
+
+    import gifhole.enrich as enrich
+
+    config = {
+        "ollama": {
+            "server": "jorge.local",
+            "port": 11434,
+            "models": ["muse-glimmer:30b-mlx"],
+        }
+    }
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps(config))
+
+    monkeypatch.setenv("GIFHOLE_CONFIG", str(cfg_file))
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    monkeypatch.delenv("GIFHOLE_OLLAMA_URL", raising=False)
+
+    assert enrich.ollama_configured() is True
+    assert enrich.ollama_host() == "http://jorge.local:11434"
+    models = enrich.fetch_ollama_models()
+    assert models == [{"id": "ollama/muse-glimmer:30b-mlx", "name": "Ollama: muse-glimmer:30b-mlx"}]
+
+
+def test_ollama_unconfigured_shows_only_external_models(monkeypatch):
+    import gifhole.enrich as enrich
+
+    monkeypatch.setattr(enrich, "load_config", lambda: {})
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    monkeypatch.delenv("GIFHOLE_OLLAMA_URL", raising=False)
+    monkeypatch.delenv("GIFHOLE_ENRICH_BACKEND", raising=False)
+
+    assert enrich.ollama_configured() is False
+
+
+def test_list_models_includes_ollama(monkeypatch):
+    import gifhole.enrich as enrich
+
+    monkeypatch.setattr(enrich, "_models_cache", None)
+    monkeypatch.setenv("OLLAMA_HOST", "http://jorge.local:11434")
+    monkeypatch.setattr(
+        enrich,
+        "fetch_ollama_models",
+        lambda: [{"id": "ollama/muse-glimmer:30b-mlx", "name": "Ollama: muse-glimmer:30b-mlx"}],
+    )
+    monkeypatch.setattr(enrich, "claude_available", lambda: (False, "no key"))
+    monkeypatch.setattr(enrich, "gemini_available", lambda: (False, "no key"))
+
+    models = enrich.list_models()
+    model_ids = {m["id"] for m in models}
+    assert "ollama/muse-glimmer:30b-mlx" in model_ids
+
+
+def test_fetch_ollama_models_dynamic(monkeypatch):
+    import httpx
+
+    import gifhole.enrich as enrich
+
+    monkeypatch.setattr(enrich, "load_config", lambda: {})
+
+    class MockResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "models": [
+                    {
+                        "name": "qwen2.5-coder:7b",
+                        "capabilities": ["completion", "tools"],
+                    },
+                    {
+                        "name": "muse-glimmer:30b-mlx",
+                        "capabilities": ["completion", "vision", "tools"],
+                    },
+                    {
+                        "name": "llama3.2-vision:11b",
+                        "capabilities": [],
+                        "details": {"family": "llama", "families": ["llama"]},
+                    },
+                ]
+            }
+
+    class MockClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url):
+            return MockResponse()
+
+    monkeypatch.setattr(httpx, "Client", MockClient)
+    models = enrich.fetch_ollama_models(host="http://test-ollama:11434")
+    model_ids = [m["id"] for m in models]
+    assert "ollama/muse-glimmer:30b-mlx" in model_ids
+    assert "ollama/llama3.2-vision:11b" in model_ids
+    assert "ollama/qwen2.5-coder:7b" not in model_ids
+
+
+def test_describe_gif_routes_to_ollama(tmp_path, monkeypatch):
+    import gifhole.enrich as enrich
+    from tests.conftest import make_gif
+
+    p = tmp_path / "test.gif"
+    p.write_bytes(make_gif())
+
+    monkeypatch.setenv("OLLAMA_HOST", "http://jorge.local:11434")
+    called = {}
+
+    def fake_ollama(images, vocabulary, model):
+        called["ollama"] = True
+        called["model"] = model
+        return {"description": "described by ollama", "meme_name": "", "tags": []}
+
+    monkeypatch.setattr(enrich, "_describe_with_ollama", fake_ollama)
+
+    result = enrich.describe_gif(p, model="ollama/muse-glimmer:30b-mlx")
+    assert called.get("ollama") is True
+    assert called.get("model") == "ollama/muse-glimmer:30b-mlx"
+    assert result["description"] == "described by ollama"
+
+
+def test_describe_with_ollama_fallback_on_501(monkeypatch):
+    import json as _json
+
+    import httpx
+
+    import gifhole.enrich as enrich
+
+    calls = []
+
+    class MockResponse:
+        def __init__(self, status_code, data=None, text=""):
+            self.status_code = status_code
+            self._data = data
+            self.text = text
+
+        def json(self):
+            return self._data
+
+    class MockClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def post(self, url, json=None):
+            calls.append(dict(json) if json else {})
+            # First request with format fails with 501
+            if len(calls) == 1:
+                return MockResponse(501, text='{"error":"structured output is unavailable"}')
+            # Second request without format succeeds with JSON content
+            return MockResponse(
+                200,
+                data={
+                    "message": {
+                        "content": _json.dumps(
+                            {
+                                "description": "a cat jumping",
+                                "meme_name": "",
+                                "known_tags": ["cat"],
+                                "new_tags": ["jump"],
+                            }
+                        )
+                    }
+                },
+            )
+
+    monkeypatch.setattr(httpx, "Client", MockClient)
+    res = enrich._describe_with_ollama(
+        images=[b"png1"],
+        vocabulary=["cat"],
+        model="ollama/muse-glimmer:30b-mlx",
+    )
+    assert res["description"] == "a cat jumping"
+    assert "cat" in res["tags"]
+    assert "jump" in res["tags"]
+    assert len(calls) == 2
+    assert "format" in calls[0]
+    assert "format" not in calls[1]
+
+
 # -- perceptual hashing ------------------------------------------------------
 
 
@@ -1146,13 +1355,13 @@ def test_app_recovers_queued_describe_across_restart(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("gifhole.enrich.default_model", lambda: "mock-model")
 
-    app1 = create_app(root=tmp_path)
+    app1 = create_app(root=tmp_path, auto_ocr=False)
     client1 = TestClient(app1)
     res = client1.post("/api/gifs/describe", json={"scope": "all"})
     assert res.status_code == 202
     app1.state.jobs.close()
 
-    app2 = create_app(root=tmp_path)
+    app2 = create_app(root=tmp_path, auto_ocr=False)
     assert app2.state.jobs.wait_idle(5)
     app2.state.jobs.close()
 

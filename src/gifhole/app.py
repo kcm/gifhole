@@ -865,14 +865,16 @@ def create_app(
         )
 
     @app.get("/api/models")
-    def list_models() -> JSONResponse:
+    def list_models(request: Request) -> JSONResponse:
         """The model picker's options, live from the account, plus the default.
 
         Writer-only (see WRITER_ONLY_PATHS): it makes an outbound API call, and
         only a writer describes, so a guest never needs it."""
         from gifhole import enrich
 
-        return JSONResponse({"models": enrich.list_models(), "default": enrich.default_model()})
+        refresh = request.query_params.get("refresh") == "1"
+        models = enrich.list_models(force=True) if refresh else enrich.list_models()
+        return JSONResponse({"models": models, "default": enrich.default_model()})
 
     # -- jobs ----------------------------------------------------------------
 

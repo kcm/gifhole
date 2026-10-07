@@ -1872,6 +1872,7 @@ function activeProviderName(modelId) {
   const mid = (modelId || chosenModel() || $("#libmodel")?.value || "").toLowerCase();
   if (mid.startsWith("gemini") || mid.startsWith("gemma")) return "Gemini";
   if (mid.startsWith("claude")) return "Claude";
+  if (mid.startsWith("ollama")) return "Ollama";
   return "AI";
 }
 
@@ -1935,7 +1936,8 @@ $("#libdescribe").addEventListener("click", async () => {
   const n = libStats?.[scope] ?? 0;
   if (!n) return;
   const provider = activeProviderName();
-  if (!confirm(`Describe ${plural(n, "GIF")} with ${provider}? That is ${n} API calls, and costs money.`)) {
+  const costNote = provider === "Ollama" ? "local calls" : "API calls, and costs money";
+  if (!confirm(`Describe ${plural(n, "GIF")} with ${provider}? That is ${n} ${costNote}.`)) {
     return;
   }
   closeLibrary();
@@ -2137,8 +2139,8 @@ async function describeIds(ids) {
     return toast(capabilities.enrich_reason || "describing needs an API key");
   }
   const provider = activeProviderName();
-  if (!confirm(`Describe ${ids.length} GIF${ids.length > 1 ? "s" : ""} with ${provider}? ` +
-      `That is one API call each, and costs money.`)) {
+  const costNote = provider === "Ollama" ? "one local call each" : "one API call each, and costs money";
+  if (!confirm(`Describe ${ids.length} GIF${ids.length > 1 ? "s" : ""} with ${provider}? That is ${costNote}.`)) {
     return;
   }
   try {
