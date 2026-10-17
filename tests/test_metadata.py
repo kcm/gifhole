@@ -819,6 +819,7 @@ def test_describe_gif_routes_to_ollama(tmp_path, monkeypatch):
         called["model"] = model
         return {"description": "described by ollama", "meme_name": "", "tags": []}
 
+    monkeypatch.setattr(enrich, "available", lambda: (True, ""))
     monkeypatch.setattr(enrich, "_describe_with_ollama", fake_ollama)
 
     result = enrich.describe_gif(p, model="ollama/muse-glimmer:30b-mlx")
